@@ -1,0 +1,221 @@
+{
+  "workflow_summary": "The developer wants an agent that plans multi-city trips end to end: given a traveler's nationality and a sequence of cities and dates, it should (a) find flight options for each leg, (b) fetch the weather forecast at each stop for the dates in question, and (c) report visa/entry requirements for the traveler's passport at each destination. Research covered live/bookable flight sources vs. scraped and cached price sources, free vs. paid weather forecast APIs, commercial vs. community visa-requirement datasets, and the geocoding/airport-code resolution layer that glues them together (city name → IATA code for flights, → lat/lon + timezone for weather, → ISO country code for visas).",
+  "tasks": [
+    {
+      "task_description": "Find flight options (routes, times, prices) between cities for given dates, including multi-city itineraries.",
+      "recommended_apis": [
+        {
+          "api_name": "Duffel Flights API",
+          "rank": 1,
+          "rationale": "The strongest self-serve source of real, live airline offers. Its offer-request model maps directly onto multi-city trip planning: one `slice` per leg of the itinerary in a single request, returning per-segment flight numbers, times, carriers, cabin and fare. Test mode allows building without commercial commitment, and the same credentials also power the Places API used for airport/city resolution, so one auth scheme covers two tasks. Chosen over scraped sources because the data is contractual airline content that can actually be booked, and the response schema is stable and documented.",
+          "docs_links": [
+            "https://duffel.com/docs/api/v2/offer-requests",
+            "https://duffel.com/docs/api/v2/places",
+            "https://duffel.com/pricing"
+          ],
+          "important_endpoints": "POST https://api.duffel.com/air/offer_requests — create a flight search; body carries `slices` (origin, destination, departure_date; one per leg for multi-city), `passengers` (type or age, loyalty accounts, fare_type), and optional `cabin_class`, `max_connections`, `private_fares`. Query params `return_offers` (set false to page results via List Offers), `supplier_timeout` (2–60s, default 20s), and `view=itineraries` to get slices/itineraries/brands grouped with reference maps instead of a flat offer list. GET /air/offer_requests and /air/offer_requests/{id} to re-read a search. Auth: `Authorization: Bearer <token>` plus the mandatory `Duffel-Version: v2` header.",
+          "potential_challenges": "The pricing model punishes a search-heavy, low-booking agent: beyond a 1500:1 search-to-book ratio Duffel charges $0.005 per excess search, and a planner that explores many itineraries per booking (or never books) sits exactly in that regime. Confirmed orders cost $3.00 each plus 1% for Managed Content and 2% FX on currency conversion. Search latency is real (default 20s supplier timeout), so the MCP tool needs generous timeouts and should set `supplier_timeout` explicitly. Test mode returns sandbox/mock airline data, so results seen during development will not match production.",
+          "confidence": "documented",
+          "open_questions": [
+            "Exact rate limits on /air/offer_requests are not stated on the pages inspected — verify before running parallel per-leg searches.",
+            "Whether a pure search/planning use case (no bookings at all) is permitted under Duffel's terms, given the excess-search fee assumes a booking baseline.",
+            "How many slices a single offer request accepts for long multi-city itineraries (5+ legs)."
+          ]
+        },
+        {
+          "api_name": "SerpApi Google Flights API",
+          "rank": 2,
+          "rationale": "Best fit when the agent only needs to *show* options and prices rather than sell them. It exposes Google Flights' own ranking (best_flights vs other_flights), carbon emissions, layover detail, legroom and price insights — comparison-grade data that a GDS-style API does not provide — and has native one-way / round-trip / multi-city modes. Signup is instant with a real free tier, so it is the lowest-friction way to prototype. Ranked second because it is a scraping intermediary, not an airline content source: prices are indicative and nothing is bookable through it.",
+          "docs_links": [
+            "https://serpapi.com/google-flights-api",
+            "https://serpapi.com/pricing"
+          ],
+          "important_endpoints": "GET https://serpapi.com/search?engine=google_flights with `departure_id`/`arrival_id` (IATA code or Google Knowledge Graph city ID), `outbound_date`, `return_date`, `type` (1=round trip, 2=one way, 3=multi-city driven by `multi_city_json`), `travel_class`, `currency`, `hl`/`gl`, `deep_search=true` for browser-identical results, and `api_key`. Response gives best_flights/other_flights with per-segment airports, times, aircraft, airline, flight_number, layovers, total_duration, carbon_emissions, price and a `departure_token` for drilling into return legs. Companion engines: google_flights_autocomplete (place resolution) and google_flights_deals.",
+          "potential_challenges": "Cost scales per search: free = 250 searches/month at 50/hour, Starter $25/mo = 1,000, Developer $75/mo = 5,000 — and a single multi-city plan can consume several searches once autocomplete and per-leg queries are counted. The docs explicitly warn that default results differ from what a user sees in a browser unless `deep_search=true`, which increases latency. Being a scraper of a third-party site, the response shape and availability track Google's UI and can change; and the data is not bookable, so the agent must hand off to a Google Flights URL. Review SerpApi's terms and Google's for your redistribution scenario.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether SerpApi's terms permit storing/caching returned flight prices for later display in your own product.",
+            "Real-world latency of deep_search=true on multi-city queries, which affects MCP tool timeouts."
+          ]
+        },
+        {
+          "api_name": "Travelpayouts Aviasales Flight Data API",
+          "rank": 3,
+          "rationale": "A near-free option (affiliate token only) that is genuinely useful for the *early* stage of trip planning — 'what does this route roughly cost in June?' — thanks to its month price-matrix and nearest-places-matrix endpoints. Ranked third because the data is cached from other users' past searches rather than a live availability query, so it cannot be presented as a real offer for a specific traveler on a specific date.",
+          "docs_links": [
+            "https://support.travelpayouts.com/hc/en-us/articles/203956163-Aviasales-Data-API"
+          ],
+          "important_endpoints": "GET https://api.travelpayouts.com/aviasales/v3/prices_for_dates?origin=MAD&destination=BCN&departure_at=YYYY-MM|YYYY-MM-DD&one_way=true&direct=false&sorting=price&currency=usd&limit=30 — cheapest cached tickets with price, airline IATA, flight_number, departure/return datetimes, transfers, durations and an Aviasales deep link. Also /aviasales/v3/get_latest_prices (period aggregation), /v2/prices/month-matrix (price calendar for a month), /v2/prices/nearest-places-matrix (alternative nearby airports). Auth: affiliate token via `X-Access-Token` header or `token` query param.",
+          "potential_challenges": "The docs state data comes from a cache of Aviasales users' searches, retained 7 days (prices_for_dates reflects the last 48 hours), and recommend it for generating static pages — prices go stale and must not be shown as bookable. Results are market-scoped (defaults to the `ru` market) and prices default to RUB, so `market` and `currency` must always be set. Rate limits are documented separately (e.g. 600 for /v3/prices_for_dates). Access is tied to an affiliate program, which carries monetization expectations and deep-link attribution.",
+          "confidence": "documented",
+          "open_questions": [
+            "The exact unit/window of the documented rate limits (per minute? per hour?) was not confirmed on the page inspected.",
+            "Whether non-affiliate/non-monetized use of the data API is permitted under Travelpayouts' terms."
+          ]
+        },
+        {
+          "api_name": "Amadeus Self-Service Flight Offers Search",
+          "rank": 4,
+          "rationale": "Historically the default recommendation for this workflow, and it appears in most tutorials and blog comparisons — but it is no longer viable for a new self-serve build. Included explicitly so the developer does not waste time pursuing it based on stale advice.",
+          "docs_links": [
+            "https://developers.amadeus.com/self-service/category/flights"
+          ],
+          "important_endpoints": "Formerly GET /v2/shopping/flight-offers (Flight Offers Search) on the self-service platform. The self-service catalogue page now redirects to an enterprise landing page and no endpoint reference is served; capabilities must be negotiated through Amadeus sales.",
+          "potential_challenges": "Blocking: developers.amadeus.com now displays 'Amadeus for Developers self-service portal has been decommissioned on July 17th, this website is for Amadeus Enterprise API Portal only.' Access requires contacting sales, and third-party comparisons indicate enterprise access expects IATA/ARC accreditation or an existing GDS relationship. No free tier, no self-serve keys, unknown lead time and contract minimums.",
+          "confidence": "partially_documented",
+          "open_questions": [
+            "The decommission notice does not state the year — confirm the exact date and whether any legacy self-service keys still function.",
+            "Whether Amadeus Enterprise offers any low-volume/startup tier suitable for an agent product, and what accreditation is actually required."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose a single high-level tool `search_flight_options(legs[], passengers, cabin_class, max_connections, currency)` where `legs` is an array of {origin, destination, date} — this maps 1:1 onto Duffel's `slices` and onto SerpApi's multi_city_json, letting you swap providers behind one contract. Internally set `supplier_timeout` and return a trimmed offer list (top N by price and by duration) rather than the raw payload; raw Duffel offer-request responses are enormous and will flood the model's context. Add a second, cheaper tool `estimate_route_price(origin, destination, month)` backed by Travelpayouts' month-matrix for the 'when is it cheapest' phase, so the agent does not burn expensive live searches while exploring dates. Do NOT expose any booking/ordering capability: Duffel's order creation, payments, seat selection and cancellation endpoints are irreversible and money-moving, and an LLM should never call them autonomously — if booking is in scope, emit a deep link or a human-confirmation handoff instead. Also do not expose Duffel's List Offer Requests (account-wide history leakage) or private_fares/corporate codes. Always include the offer's expiry/`created_at` and the provider name in the tool output so the agent can tell the user how fresh a price is."
+    },
+    {
+      "task_description": "Check the weather forecast at each stop of the itinerary for the planned dates.",
+      "recommended_apis": [
+        {
+          "api_name": "Open-Meteo Weather Forecast API",
+          "rank": 1,
+          "rationale": "Purpose-built for exactly this shape of request: it accepts comma-separated coordinate lists so every stop on a multi-city trip can be fetched in a single call, supports up to 16 forecast days (matching typical trip-planning horizons), returns daily aggregates like max/min temperature, precipitation sum and precipitation probability that summarise well for a traveler, and requires no API key or signup for non-commercial use. It also pairs with its own free geocoding API, so city name → forecast is two unauthenticated calls.",
+          "docs_links": [
+            "https://open-meteo.com/en/docs",
+            "https://open-meteo.com/en/docs/geocoding-api"
+          ],
+          "important_endpoints": "GET https://api.open-meteo.com/v1/forecast?latitude=52.52,48.85&longitude=13.41,2.35&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&timezone=auto&forecast_days=16. Key params: `latitude`/`longitude` (comma-separated for multi-location; response becomes a list), `daily`/`hourly`/`current` variable lists, `forecast_days` 0–16 (default 7), `past_days` 0–92, `timezone` (IANA name or `auto`), `temperature_unit`, `wind_speed_unit`, `precipitation_unit`, `timeformat`, and `models` to pin a specific weather model (default `best_match`).",
+          "potential_challenges": "Documentation states that when `daily` variables are requested the `timezone` parameter is required — omitting it is a common integration bug. The free tier is limited to non-commercial use and under 10,000 calls/day with no uptime guarantee; commercial use requires a subscription, an `apikey` param and switching to the `customer-` URL prefix. Data is CC BY 4.0 and attribution is required. Forecast horizon caps at 16 days, so trips planned further out cannot be covered — the tool must degrade gracefully (e.g. fall back to climate averages or say 'too far out').",
+          "confidence": "documented",
+          "open_questions": [
+            "Exact commercial subscription pricing tiers were not inspected (see open-meteo.com/en/pricing).",
+            "Whether an MCP server used inside a paid product counts as 'commercial use' — likely yes; confirm before launch."
+          ]
+        },
+        {
+          "api_name": "OpenWeather (One Call 4.0 / free tier products)",
+          "rank": 2,
+          "rationale": "The pragmatic alternative when a commercial licence and an SLA matter more than free access, or when you want a human-readable daily summary string. Its Geocoding API is bundled on the free tier, so it can also cover the place-resolution task with a single key. Ranked second because the genuinely free products cap out at a 5-day/3-hour forecast — shorter than most trip-planning horizons — and anything longer (16-day daily, 4-day hourly) sits behind a paid subscription, whereas Open-Meteo gives 16 days for free.",
+          "docs_links": [
+            "https://openweathermap.org/price",
+            "https://openweathermap.org/api/one-call-3"
+          ],
+          "important_endpoints": "One Call: GET https://api.openweathermap.org/data/3.0/onecall?lat={lat}&lon={lon}&exclude={parts}&appid={key} — current conditions, minutely (1h), hourly (48h), daily (8 days, including a human-readable `summary` field) and government weather alerts. Free-tier alternatives: /data/2.5/forecast (5-day / 3-hour) and /data/2.5/weather (current). Geocoding: https://openweathermap.org/api/geocoding-api for name → lat/lon.",
+          "potential_challenges": "Requires signup and an API key. One Call is pay-per-call: first 1,000 calls/day free, then 0.0012 GBP per call, and a daily spend threshold must be set manually to avoid surprise charges. Longer-range daily forecasts (16- and 30-day) and 4-day hourly are gated behind subscription plans starting at 30 GBP/month, with the Startup tier offering only 95% availability and 2-hourly data refresh. Data is ODbL-licensed, which imposes share-alike obligations if you redistribute derived databases. Only one coordinate pair per call, so an N-stop trip costs N calls.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether One Call 4.0 (the current timeline-based product) preserves the 8-day daily block and `summary` field documented for 3.0 — the 4.0 description page was not inspected.",
+            "The precise free-tier call ceiling interaction between the 1,000/day One Call allowance and the 1M/month general free allowance."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose one tool, `get_destination_forecast(locations[], start_date, end_date, units)`, where each location is {name | lat, lon}. Internally resolve names via the geocoding tool, then issue a single Open-Meteo call with comma-separated coordinates for all stops — this keeps a five-city trip at one HTTP request. Always send `timezone=auto` (required when daily variables are requested) and request a compact daily variable set (weather_code, temperature_2m_max/min, precipitation_sum, precipitation_probability_max) rather than hourly data: hourly arrays for multiple cities over two weeks will swamp the context window. Translate WMO `weather_code` integers into plain-language conditions inside the server, not in the model. Handle the 16-day horizon explicitly: if the requested dates fall outside it, return a structured 'beyond_forecast_horizon' result with the seasonal caveat rather than silently returning nothing. Do NOT expose the pressure-level, soil-moisture, solar-radiation or model-comparison parameters — they are irrelevant to trip planning and only enlarge the tool schema."
+    },
+    {
+      "task_description": "Look up visa and entry requirements for the traveler's nationality at each destination country.",
+      "recommended_apis": [
+        {
+          "api_name": "Travel Buddy Visa Requirements API",
+          "rank": 1,
+          "rationale": "The most self-serve-accessible option with the richest traveler-facing payload: it distinguishes a primary rule from a secondary rule (e.g. 'visa on arrival OR eVisa'), surfaces exception rules (visa waivers for holders of third-country visas), and — uniquely among the candidates — flags mandatory pre-arrival registrations like e-Arrival forms that travelers routinely miss. It also returns passport-validity requirements and links to official government application portals, which is exactly what a trip-planning agent should hand the user. Instant signup through RapidAPI with a free tier makes it usable on day one.",
+          "docs_links": [
+            "https://travel-buddy.ai/api/"
+          ],
+          "important_endpoints": "POST https://visa-requirement.p.rapidapi.com/v2/visa/check with JSON {\"passport\":\"CN\",\"destination\":\"ID\"} (ISO 3166-1 alpha-2) → data.visa_rules.primary_rule/secondary_rule/exception_rule (name, duration, color, link), data.mandatory_registration, data.destination.passport_validity, embassy_url, currency and timezone metadata. POST /v2/visa/map {\"passport\":\"CN\"} → destinations grouped by color for map views. GET /v2/visa/check/history/{passport}/{destination}/{fromDate} → rule-change history. POST /v2/passport/rank/custom → weighted passport ranking. Auth via RapidAPI key / X-RapidAPI-Proxy-Secret.",
+          "potential_challenges": "Documentation quality is a concern: the same page states the free tier is '120 monthly requests' in the pricing section and '200 requests per month' in the FAQ — budget for the lower figure. Paid plans start at $4.99/mo for 3,000 requests. The Historic Visa Rules endpoint returns *demo* data (flagged data_mode:'demo') unless you are on the MEGA/CUSTOM plan, which is easy to mistake for real data in testing. Access is mediated by RapidAPI, adding a third-party dependency and its own auth/quota layer. Coverage is 200 passports × 211 destinations, so some territories will be missing. Crucially, this is a commercial dataset, not an authoritative government source.",
+          "confidence": "documented",
+          "open_questions": [
+            "Which free-tier request cap is authoritative — 120 or 200 per month.",
+            "How frequently the underlying rule data is refreshed and whether a per-record last-updated timestamp is available on /v2/visa/check (only a `generated_at` response timestamp is documented).",
+            "Whether the API models transit-only visas, which matter for multi-city itineraries with connections."
+          ]
+        },
+        {
+          "api_name": "Sherpa API (joinsherpa.com)",
+          "rank": 2,
+          "rationale": "The most travel-industry-credible option — Sherpa powers entry-requirement widgets for airlines and corporate travel platforms. Its /entry-requirements response is the best match for an agent's needs because it returns pre-written natural-language sentences with a severity class alongside structured enums, plus passport blank-page and validity rules, currency declaration limits and vaccination requirements in one call. Ranked second only because you cannot self-serve: credentials require a business conversation, which blocks prototyping.",
+          "docs_links": [
+            "https://documenter.getpostman.com/view/2025972/sherpa-api-v2/6YzvDPM",
+            "https://www.joinsherpa.com/products/travel-requirements"
+          ],
+          "important_endpoints": "GET https://api.joinsherpa.com/v2/entry-requirements/{citizenship}-{destination} (e.g. CA-BR) → visa[] (requirement, type, allowed_stay, notes, textual.class + textual.text), passport (passport_validity, blank_pages with textual explanations), currency (arrival/exit declaration rules), vaccination (required/recommended/risk). GET /v2/visa-requirements/{citizenship}-{destination} → visa only, with requirement enum NOT_REQUIRED | E_VISA | EMBASSY_VISA | ON_ARRIVAL | RECIPROCITY_FEE | SPECIAL_PROVISION. Auth: HTTP Basic with an issued key.",
+          "potential_challenges": "Access is gated — the docs say to email Sherpa for credentials; there is no signup form, no published pricing and no free tier, so expect a sales cycle and likely a commercial minimum. The public documentation is a Postman collection labelled 'Version 2.0.3 Beta' with example responses dated 2017, so it may lag the current production API (marketing pages reference a newer 'Trips' endpoint taking origin/destination/date context that is absent from this collection). Vaccination and advisory data carry the same 'not authoritative' caveat as visa data.",
+          "confidence": "documented",
+          "open_questions": [
+            "Current pricing, rate limits and minimum commitment — none are published.",
+            "Whether the newer trip-context 'Trips' endpoint advertised on the product page is available to all API customers and how it differs from /entry-requirements.",
+            "Whether the Postman collection reflects the live v2 schema or is outdated."
+          ]
+        },
+        {
+          "api_name": "Passport Visa API (nickypangers, community)",
+          "rank": 3,
+          "rationale": "Worth knowing as a zero-friction fallback or a cross-check source: no key, no signup, a simple ISO2-pair lookup returning a category code and permitted stay in days, plus a per-passport summary endpoint. Useful for local development, tests, and for detecting disagreement with a paid provider. Not suitable as the sole production source for advice a traveler will act on.",
+          "docs_links": [
+            "https://github.com/nickypangers/passport-visa-api"
+          ],
+          "important_endpoints": "GET https://rough-sun-2523.fly.dev/visa/{passportISO2}/{destinationISO2} → {passport, destination, dur (days or null), category {name, code: VF|VOA|EV|VR|NA}, last_updated}. GET /country/{ISO2} → every destination for that passport grouped into VR/VOA/EV/VF/NA arrays. OpenAPI description at /doc. No authentication.",
+          "potential_challenges": "Hobby-grade operational risk: a single community-run fly.dev instance with no SLA, no rate-limit documentation, and a URL that could disappear. Data is community-contributed and seeded from Passport Index, with the README inviting issues for inaccurate entries — i.e. accuracy is explicitly best-effort. The payload is coarse: a category code and duration only, with no passport-validity rules, no eVisa application links, no exceptions, no transit handling and no mandatory-registration flags.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether the hosted instance is intended for third-party production traffic at all, and what rate limits apply.",
+            "How stale the underlying dataset is (last_updated values in examples are from 2024)."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose `check_visa_requirement(nationality_iso2, destination_iso2, purpose='tourism')` returning a normalised object: {requirement_category, max_stay_days, passport_validity_rule, pre_arrival_registration, official_application_url, source_name, source_last_updated, disclaimer}. Normalise the differing vocabularies (Travel Buddy's colors/rule names, Sherpa's E_VISA/EMBASSY_VISA enums, the community API's VF/VOA/EV/VR/NA codes) inside the server so the model reasons over one schema. Add `check_itinerary_visas(nationality, stops[])` that fans out across all destinations in one call — the natural composition with the flight tool's leg list. Two design rules matter here more than anywhere else in this workflow: (1) every response MUST carry the source and its last-updated timestamp plus an explicit 'not authoritative — verify with the embassy or official portal before travel' disclaimer, because none of these APIs is a government or IATA Timatic source and an agent stating 'you don't need a visa' can cause a denied boarding; (2) never expose visa *application* or payment endpoints (Sherpa sells visa-processing products) — the agent should only ever surface the official application URL for the human to act on. Do not expose the passport-ranking or map-color endpoints; they are marketing features irrelevant to trip planning and only add tool-surface noise. Consider querying two providers and flagging disagreement rather than silently trusting one."
+    },
+    {
+      "task_description": "Resolve user-supplied city names into the identifiers the other tasks need: IATA airport/city codes for flights, latitude/longitude and timezone for weather, and ISO country codes for visa lookups.",
+      "recommended_apis": [
+        {
+          "api_name": "Duffel Places API",
+          "rank": 1,
+          "rationale": "The only candidate that returns airport-grade identifiers — IATA airport code, IATA *city* (metropolitan area) code, and ICAO code — alongside latitude, longitude, timezone and ISO country code. That combination single-handedly feeds all three downstream tasks. The metropolitan-area concept matters for multi-city planning: 'London' must become LON so the flight search considers LHR/LGW/STN rather than arbitrarily picking one. Same credentials as the flight search, so no extra auth.",
+          "docs_links": [
+            "https://duffel.com/docs/api/v2/places"
+          ],
+          "important_endpoints": "GET https://api.duffel.com/places/suggestions?query=heathr — free-text match against airport/city/country names and IATA codes; alternatively lat/lng/rad for radius search. Returns type (airport|city), name, iata_code, iata_city_code, icao_code, iata_country_code (ISO 3166-1 alpha-2), latitude, longitude, time_zone, city_name, and for cities the nested `airports` list. Auth: Bearer token + `Duffel-Version: v2`.",
+          "potential_challenges": "Requires a Duffel account, so it is not usable standalone if you pick a non-Duffel flight provider. The response includes a deprecation warning for the legacy `name` query parameter — use `query`. The documented example response contains obviously wrong coordinates for Heathrow (lat 64.07, lng -141.95), so validate coordinates before feeding them to the weather API rather than trusting them blindly. Coverage is aviation-centric: small towns without airports will not resolve.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether places/suggestions calls count toward the search-to-book ratio used for Duffel's excess search fee.",
+            "Rate limits for the places endpoint, which an autocomplete-style tool could hit quickly.",
+            "Whether the odd latitude/longitude values in the docs are only a documentation artefact or reflect real data quality issues."
+          ]
+        },
+        {
+          "api_name": "Open-Meteo Geocoding API",
+          "rank": 2,
+          "rationale": "The best free, keyless complement: it resolves any city or postal code globally to lat/lon, IANA timezone and ISO-3166-1 alpha-2 country code — precisely the inputs the weather and visa tools need — with population and admin hierarchy for disambiguating the many 'Berlin's and 'Springfield's. It has no aviation data, so it complements rather than replaces Duffel Places.",
+          "docs_links": [
+            "https://open-meteo.com/en/docs/geocoding-api"
+          ],
+          "important_endpoints": "GET https://geocoding-api.open-meteo.com/v1/search?name=Berlin&count=10&language=en&countryCode=DE → results[] with id, name, latitude, longitude, elevation, timezone, country_code, country, population, admin1–admin4 and postcodes. `name` accepts a '<location>, <country or admin1>' qualifier (the qualifier must match exactly). GET /v1/get?id={id} resolves any returned ID. No API key for non-commercial use.",
+          "potential_challenges": "Same licensing split as the forecast API: free only for non-commercial use under 10,000 calls/day; commercial use needs an apikey and the `customer-` host prefix, with CC BY 4.0 attribution required. Matching rules are prefix-based and case/diacritic-insensitive, and partial qualifiers silently fail to match (e.g. 'Los Angeles, Calif' does not match California), so the tool should retry with `countryCode` on ambiguous input. Returns no IATA/airport information at all — it cannot serve the flight task on its own.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether GeoNames-derived population data is fresh enough to reliably rank the 'intended' city first for ambiguous names."
+          ]
+        },
+        {
+          "api_name": "OpenWeather Geocoding API",
+          "rank": 3,
+          "rationale": "A reasonable third option purely because it is included in OpenWeather's free tier: if you have already chosen OpenWeather for forecasts, you get name→coordinate resolution under the same key with no additional integration. Ranked last because it was not inspected at endpoint level in this research and, like Open-Meteo's, it provides no aviation identifiers.",
+          "docs_links": [
+            "https://openweathermap.org/price",
+            "https://openweathermap.org/api/geocoding-api"
+          ],
+          "important_endpoints": "Listed on OpenWeather's pricing page as a product available on every plan including the free tier; the direct geocoding endpoint converts a place name (and optional state/country) into latitude/longitude, with a reverse endpoint for the inverse. Exact parameter names and response fields were not verified against the endpoint reference during this research.",
+          "potential_challenges": "Requires an OpenWeather API key and is bound by the free tier's 60 calls/minute limit shared with your weather calls. Only its availability per plan was confirmed from the pricing page — the endpoint reference itself was not inspected, so treat the parameter details as unverified. Provides no IATA/ICAO codes; whether it returns an IANA timezone name (as opposed to a UTC offset) for the weather call is unconfirmed.",
+          "confidence": "assumed",
+          "open_questions": [
+            "Exact endpoint URL, parameters and response schema — must be read at openweathermap.org/api/geocoding-api before use.",
+            "Whether it returns ISO alpha-2 country codes suitable for driving the visa lookup.",
+            "Whether it returns an IANA timezone identifier."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose one composite tool, `resolve_place(query, prefer='city')`, that returns a single canonical object: {display_name, iata_city_code, iata_airport_codes[], latitude, longitude, timezone, country_iso2, country_name, confidence, alternatives[]}. Implement it by calling Duffel Places for aviation identifiers and Open-Meteo Geocoding for coordinates/timezone/country, merging the two — this one tool then satisfies the input requirements of the flight, weather and visa tools, and is the natural first step in every multi-city planning chain. Always return `alternatives[]` when the query is ambiguous so the agent can ask the user 'Berlin, Germany or Berlin, New Hampshire?' instead of guessing; never silently pick the first match. Cache results aggressively — place data is essentially static, and caching directly reduces both Duffel search-ratio exposure and SerpApi credit burn. Do not expose the radius/lat-lng search mode or the raw admin1–admin4 hierarchy to the model; they add schema surface without helping trip planning."
+    }
+  ],
+  "cross_task_notes": "Composition: the whole workflow is a chain rooted in place resolution. `resolve_place` produces three identifiers that fan out — the IATA city code drives `search_flight_options`, the lat/lon + timezone drive `get_destination_forecast`, and the ISO alpha-2 country code drives `check_visa_requirement`. Design the MCP server so a single `plan_trip(nationality, stops[])` orchestration is possible: resolve all stops once, then issue one batched weather call (Open-Meteo accepts comma-separated coordinates), one visa call per destination country, and one flight search per leg.\n\nAuth footprint: the leanest viable stack is Duffel (one Bearer token covering both flights and places) + Open-Meteo (no key at all for geocoding and forecast, non-commercial) + one visa provider key via RapidAPI — so realistically two credentials. If you go the non-bookable route instead, it becomes SerpApi (one key covering flights, flight autocomplete and, via other engines, more) + Open-Meteo + a visa key. Note that Open-Meteo's free tier is non-commercial only, so a commercial product needs a paid Open-Meteo plan or a switch to OpenWeather.\n\nCost model is the decisive architectural constraint. Both leading flight options penalise exploratory searching: Duffel charges $0.005 per search beyond a 1500:1 search-to-book ratio, and SerpApi bills per search from a monthly quota (250 free, 1,000 at $25). An LLM agent will naturally issue many speculative searches. Mitigate with (a) aggressive caching of place resolution and of route/date price estimates, (b) a cheap Travelpayouts-backed `estimate_route_price` tool for the exploratory 'which dates?' phase, reserving live search for a shortlist, and (c) an explicit per-session search budget enforced in the server.\n\nSafety/policy: the only genuinely dangerous surface in this workflow is booking — Duffel order creation, payment and cancellation must not be exposed as agent-callable tools. The highest-risk *informational* surface is visa data: none of the available APIs is authoritative (government or IATA Timatic), and confidently wrong visa advice can cause denied boarding. Every visa response should carry provider name, last-updated timestamp, an official-portal link and a verify-with-the-embassy disclaimer; consider querying two providers and surfacing disagreement. Secondary caveat: flight prices from SerpApi and Travelpayouts are indicative only and must be labelled as such, with the freshness/expiry stamp passed through to the user.\n\nStale-advice warning worth flagging to any developer starting from tutorials or blog comparisons: Amadeus Self-Service — the API most guides still recommend for exactly this workflow — has been decommissioned, and Kiwi's Tequila API is likewise no longer openly available to new developers. Duffel and SerpApi are the current self-serve realities."
+}

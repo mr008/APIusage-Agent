@@ -1,0 +1,132 @@
+{
+  "workflow_summary": "The developer wants an agent that periodically (daily) checks a GitHub repository for newly created issues, produces a natural-language summary/digest of those issues, and posts that digest as a message into a Slack channel. This decomposes into three integration surfaces: (1) reading new issue data from GitHub, (2) generating a summary of that data, and (3) delivering the summary to Slack.",
+  "tasks": [
+    {
+      "task_description": "Watch a GitHub repository for newly created issues and fetch their metadata (title, body, author, labels, timestamps) since the last check.",
+      "recommended_apis": [
+        {
+          "api_name": "GitHub REST API - List repository issues (GET /repos/{owner}/{repo}/issues)",
+          "rank": 1,
+          "rationale": "A simple, pollable, pull-based endpoint that fits a 'daily digest' cron-style agent perfectly: call it once a day with `since=<timestamp of last run>` to get issues created/updated after that time, filter by `created_at` to get only genuinely new issues, and exclude entries containing a `pull_request` key. No public server or inbound network endpoint is required, which matches an MCP tool model (agent pulls data on demand) far better than webhooks.",
+          "docs_links": [
+            "https://docs.github.com/en/rest/issues/issues",
+            "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
+            "https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api"
+          ],
+          "important_endpoints": "GET /repos/{owner}/{repo}/issues with query params `since` (ISO-8601 timestamp), `state=open|closed|all`, `labels`, `sort`, `direction`, `per_page`/`page` for pagination. Returns issue objects containing title, body, user (author), labels, created_at, html_url, comments count, etc. Note: this endpoint also returns pull requests (identifiable via the `pull_request` key) so digest logic must filter them out unless PRs are desired too.",
+          "potential_challenges": "Requires a personal access token or GitHub App token for reasonable rate limits (5,000 req/hr authenticated vs 60/hr unauthenticated) — trivial for a once-daily job but still needs credential management. Need to track 'last checked' timestamp/state yourself (the API doesn't do delta-tracking for you). Body text can be large/markdown, may need trimming before summarization. Private repos require a token with repo scope; org repos may need additional installation/permission steps for a GitHub App.",
+          "confidence": "documented",
+          "open_questions": [
+            "Should PR-derived 'issues' be excluded, and how should very large issue bodies be truncated before summarization?",
+            "Is the target repo private (requiring stricter token scopes) or public?"
+          ]
+        },
+        {
+          "api_name": "GitHub Webhooks (issues event) + receiving server",
+          "rank": 2,
+          "rationale": "Push-based, real-time alternative: GitHub POSTs a payload to a configured HTTPS endpoint whenever an issue is opened/edited/etc. Better for near-real-time notification workflows, but poorly suited to a 'daily digest' MCP tool because it requires standing up and securing a publicly reachable webhook receiver (with HMAC signature verification) that accumulates events until the daily summarization run — this is infrastructure the MCP server would have to own, rather than a simple callable tool.",
+          "docs_links": [
+            "https://docs.github.com/en/webhooks/webhook-events-and-payloads",
+            "https://docs.github.com/en/webhooks/about-webhooks"
+          ],
+          "important_endpoints": "Repository webhook configured to send the `issues` event (action: opened, etc.) as an HTTP POST with JSON payload including the issue object, repository, and sender. Delivery headers include X-GitHub-Event and X-Hub-Signature-256 for verification.",
+          "potential_challenges": "Requires a persistently running, publicly accessible receiver endpoint plus secret-based signature verification, storage of accumulated events until digest time, replay/retry handling, and payload size cap (25MB). This shifts complexity from 'call an API' to 'operate a service', which is a poor fit for a lightweight MCP tool design; the polling REST approach is simpler for a scheduled daily digest.",
+          "confidence": "documented",
+          "open_questions": [
+            "Does the developer have infrastructure to host a public webhook receiver, or is a simple daily poll acceptable instead?"
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose a single read-only MCP tool, e.g. `list_new_github_issues(owner, repo, since)`, that wraps GET /repos/{owner}/{repo}/issues, handles pagination internally, filters out pull requests, and returns a clean array of {number, title, body, author, labels, url, created_at}. The MCP server should store/accept the 'since' cursor (e.g. last run timestamp) so the agent doesn't need to manage GitHub-specific state. Do NOT expose issue-mutating endpoints (create/close/comment/label) since this workflow is read-only and destructive/write capability is out of scope and a policy risk. Webhook-based ingestion should not be implemented as an MCP tool (MCP tools are invoked by the agent, not pushed to); if real-time behavior is later desired, that would be a separate event-ingestion service, not part of this MCP tool surface."
+    },
+    {
+      "task_description": "Summarize the collected new issues into a concise daily digest (text generation/summarization step).",
+      "recommended_apis": [
+        {
+          "api_name": "Agent-native summarization (the calling agent's own LLM reasoning)",
+          "rank": 1,
+          "rationale": "The workflow is described as being run by 'an agent', which implies it is already backed by an LLM capable of summarizing structured data handed to it (e.g. the issue list from the GitHub tool). In this common case, no external summarization API is needed at all — the MCP server just needs to supply the raw issue data (task 0) and a posting tool (task 2); the agent's own model turns the data into digest text between tool calls.",
+          "docs_links": [
+            "https://docs.github.com/en/rest/issues/issues"
+          ],
+          "important_endpoints": "N/A — no dedicated API call; this is the agent's own inference step, orchestrated by whatever LLM/runtime is hosting the agent, operating on the data returned by the GitHub issues tool (linked doc shown for the data shape it consumes).",
+          "potential_challenges": "Only applicable if the orchestrating agent is itself LLM-backed (true for most MCP-based agent frameworks). If the workflow must run as a bare automation/script without an LLM in the loop, an external generation API becomes necessary (see alternatives).",
+          "confidence": "assumed",
+          "open_questions": [
+            "Confirm whether the deployment target is an LLM-driven agent (no extra API needed) or a plain scheduled script with no LLM of its own (requires an external generation API)."
+          ]
+        },
+        {
+          "api_name": "OpenAI Chat Completions API",
+          "rank": 2,
+          "rationale": "If digest generation must happen as a standalone call independent of the orchestrating agent (e.g. a non-agentic cron job), OpenAI's Chat Completions endpoint can take the list of issues as a prompt and return a written summary. Well documented, broad model choice, simple bearer-token auth.",
+          "docs_links": [
+            "https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/",
+            "https://developers.openai.com/api/reference/overview/",
+            "https://developers.openai.com/api/docs/pricing"
+          ],
+          "important_endpoints": "POST https://api.openai.com/v1/chat/completions — send `model` and a `messages` array (system/user prompt containing the issue list); returns generated summary text in `choices[0].message.content`. Also a newer Responses API exists as an alternative interface.",
+          "potential_challenges": "Requires paid API key and usage-based billing (per-1M-token pricing, varying widely by model, roughly $0.2–$30+/1M tokens). Need prompt-engineering to keep digest concise/consistent. Rate limits and quota management apply. Introduces a second vendor/credential to manage beyond GitHub and Slack.",
+          "confidence": "documented",
+          "open_questions": [
+            "Which model/price tier is acceptable for ongoing daily-digest cost?"
+          ]
+        },
+        {
+          "api_name": "Anthropic Claude Messages API",
+          "rank": 3,
+          "rationale": "Comparable alternative to OpenAI for standalone summarization if the agent has no built-in LLM. Offers a Message Batches API with 50% cost reduction for bulk/async processing, which could suit summarizing many issues across multiple repos in one batch job.",
+          "docs_links": [
+            "https://platform.claude.com/docs/en/api/overview",
+            "https://platform.claude.com/docs/en/build-with-claude/working-with-messages",
+            "https://platform.claude.com/docs/en/api/rate-limits"
+          ],
+          "important_endpoints": "POST https://api.anthropic.com/v1/messages with `model`, `max_tokens`, and a `messages` array; returns generated content. POST /v1/messages/batches for async bulk summarization at reduced cost.",
+          "potential_challenges": "Requires Claude Console account and API key (`x-api-key` header) plus mandatory `anthropic-version` header; paid usage-based pricing; tiered rate limits (RPM/TPM) per organization that may require a rate-limit-increase request for heavier use.",
+          "confidence": "documented",
+          "open_questions": [
+            "Would batch processing (50% cheaper, async) fit the daily-cadence use case better than a synchronous call?"
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "In the typical case (an LLM-driven agent using this MCP server), do NOT add a dedicated 'summarize' tool — summarization is the agent's own job once it has the issue list from the GitHub tool; adding an LLM-calling tool here would be redundant and would obscure cost/control from the agent's host application. Only if the target deployment is a non-agentic automation (no LLM in the loop) should the MCP server expose a thin `summarize_text(content, style)` tool backed by OpenAI or Anthropic, kept model-agnostic and stateless, with the API key configured server-side (never passed through the agent). Ask the developer to confirm this deployment shape before adding such a tool."
+    },
+    {
+      "task_description": "Post the generated digest message to a designated Slack channel.",
+      "recommended_apis": [
+        {
+          "api_name": "Slack Web API - chat.postMessage",
+          "rank": 1,
+          "rationale": "Best fit for an MCP tool: a single bot token can post to any channel it has been invited to, chosen dynamically per call (by channel ID or name), supports rich formatting via Block Kit, and returns structured confirmation (ok, channel, ts) that the MCP tool can surface back to the agent for error handling/retries. More flexible and better documented for programmatic, parameterized use than incoming webhooks.",
+          "docs_links": [
+            "https://docs.slack.dev/reference/methods/chat.postMessage",
+            "https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks"
+          ],
+          "important_endpoints": "POST https://slack.com/api/chat.postMessage with Authorization: Bearer <bot token> (requires chat:write scope), body params `channel` (ID or name) and `text` or `blocks`. Returns JSON with ok/channel/ts/message. Bot must be a member of / invited to the target channel or the call fails with 'not_in_channel'.",
+          "potential_challenges": "Requires creating a Slack app, adding the chat:write (and channels:read if resolving channel names) OAuth scope, installing it to the workspace, and inviting the bot user to the target channel — more setup than a webhook but reusable across channels. Token must be stored securely server-side. Subject to Slack API rate limits (tiered by method).",
+          "confidence": "documented",
+          "open_questions": [
+            "Is the bot already a member of the target Slack channel, or does channel-invite setup need to be part of onboarding?",
+            "Should the tool support multiple destination channels or just one fixed channel?"
+          ]
+        },
+        {
+          "api_name": "Slack Incoming Webhooks",
+          "rank": 2,
+          "rationale": "Simpler zero-OAuth-scope alternative: after one-time setup (create app, enable incoming webhooks, authorize a specific channel), posting is just an HTTP POST of {\"text\": ...} to a fixed URL. Good minimal-setup option if the digest will always go to exactly one known channel and no dynamic channel selection, threading, or richer Slack API operations are needed.",
+          "docs_links": [
+            "https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks"
+          ],
+          "important_endpoints": "POST https://hooks.slack.com/services/T000/B000/XXXX with JSON body {\"text\": \"...\"} (Block Kit blocks also supported). No per-request auth header needed — the secret is embedded in the URL itself.",
+          "potential_challenges": "The webhook URL is bound to one specific channel chosen at creation time — cannot be redirected to another channel without creating a new webhook; the URL itself is a bearer secret and must be protected; lacks advanced features (message updates/deletes, dynamic channel routing) available via the full Web API.",
+          "confidence": "documented",
+          "open_questions": [
+            "Will the digest always target a single fixed Slack channel (favors Incoming Webhook simplicity) or should the target channel be configurable per call (favors chat.postMessage)?"
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose one MCP tool, e.g. `post_slack_digest(channel, text_or_blocks)`, implemented via chat.postMessage for flexibility (dynamic channel argument, structured Block Kit formatting, and a success/failure return value the agent can act on). If the developer only ever posts to one known channel and wants minimal setup, an Incoming-Webhook-backed variant is an acceptable simpler substitute — but do not expose both as separate tools; pick one per deployment to avoid ambiguity. Do NOT expose broader Slack write capabilities (deleting messages, managing channels/users, posting to arbitrary DMs) — scope the tool strictly to posting the digest text/blocks to the one intended channel."
+    }
+  ],
+  "cross_task_notes": "Overall MCP server shape: three credentials are needed — a GitHub token (repo read scope), and a Slack bot token or incoming-webhook URL; an LLM-generation API key is only needed if summarization is NOT already performed by the agent's own model. Recommended tool set: (1) `list_new_github_issues(owner, repo, since)` — read-only, safe, idempotent; (2) optionally `summarize_text(...)` only for non-agentic deployments; (3) `post_slack_digest(channel, text_or_blocks)` — the only 'write' tool, and it should be scoped narrowly (post-only, single channel/purpose) to avoid becoming a general-purpose Slack-write backdoor. The natural daily-cadence trigger (cron/scheduler) sits outside the MCP server itself — MCP tools are invoked by the agent on schedule, so no GitHub webhook receiver or persistent inbound listener is needed for this workflow, keeping the server stateless aside from tracking a 'last checked' timestamp for the GitHub polling tool. Sensitive/destructive capabilities intentionally excluded across all tasks: GitHub issue creation/edit/close/comment, Slack message deletion/editing or workspace/channel management, and any broad-scope OAuth beyond chat:write and repo-read."
+}

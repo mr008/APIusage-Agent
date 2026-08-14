@@ -1,0 +1,166 @@
+{
+  "workflow_summary": "The developer wants to build an agent that (1) discovers restaurants located in a user-specified geographic area, (2) identifies each restaurant's public website, and (3) visits those websites to fetch and extract menu information (dish names, prices, categories). This requires combining a places/business-search API for discovery with a web scraping/content-extraction API for the unstructured, highly heterogeneous task of reading menus off arbitrary restaurant websites (which are often JS-rendered, image-based PDFs, or third-party ordering platforms).",
+  "tasks": [
+    {
+      "task_description": "Find restaurants in a given geographic area (location-based business/place search).",
+      "recommended_apis": [
+        {
+          "api_name": "Google Places API (New) — Nearby Search / Text Search",
+          "rank": 1,
+          "rationale": "Most comprehensive and globally consistent restaurant/POI coverage, native support for radius/lat-lng search and restaurant type filtering, and rich optional fields (hours, rating, price level, website) via field masks. Widely used and well documented, with a modern JSON REST interface.",
+          "docs_links": [
+            "https://developers.google.com/maps/documentation/places/web-service/nearby-search",
+            "https://developers.google.com/maps/documentation/places/web-service/overview",
+            "https://developers.google.com/maps/billing-and-pricing/pricing"
+          ],
+          "important_endpoints": "POST https://places.googleapis.com/v1/places:searchNearby (search by lat/lng circle + includedTypes=['restaurant']); POST .../places:searchText for free-text/area queries; GET https://places.googleapis.com/v1/places/{place_id} (Place Details) for enriched fields. All require X-Goog-Api-Key and a mandatory X-Goog-FieldMask.",
+          "potential_challenges": "Field-mask-based SKU billing means requesting more fields (e.g. websiteUri, rating, hours) jumps you from the cheaper 'Pro' SKU tier to costlier 'Enterprise'/'Enterprise+Atmosphere' tiers ($28-40+ per 1,000 calls above free caps); mandatory API key tied to a billed Google Cloud project; no results returned without an explicit field mask; only 1,000 free calls/month at Enterprise tier.",
+          "confidence": "documented",
+          "open_questions": [
+            "Exact free-tier call caps for the specific fields this workflow needs (name/address/location vs. website/hours) should be re-verified against the live pricing page before committing.",
+            "Whether Text Search or Nearby Search is preferable for 'a given area' phrased as a place name vs. coordinates — Text Search handles natural-language areas better."
+          ]
+        },
+        {
+          "api_name": "Yelp Fusion / Yelp Places API",
+          "rank": 2,
+          "rationale": "Purpose-built for exactly this restaurant-discovery use case (term/category/location search, price level, open-now filters) with a simple REST GET interface and a genuine free tier for low volume.",
+          "docs_links": [
+            "https://docs.developer.yelp.com/reference/v3_business_search",
+            "https://docs.developer.yelp.com/docs/places-intro",
+            "https://business.yelp.com/data/products/places-api/",
+            "https://docs.developer.yelp.com/docs/places-rate-limiting"
+          ],
+          "important_endpoints": "GET https://api.yelp.com/v3/businesses/search (location/lat-lng, term, categories, radius, price, open_now, sort_by, limit≤50); GET /v3/businesses/{id} for details; GET /v3/businesses/{id}/reviews.",
+          "potential_challenges": "Default access capped at 5,000 calls/24hr (30,000/month); beyond the 30-day trial, paid plans are reportedly expensive and pricing has been criticized publicly as opaque (TechCrunch, Aug 2024); several useful filters (ambience, accepts_credit_cards) are gated behind a 'Yelp Places Premium Plan'; does not expose the restaurant's own website URL (see task 2 below), only a Yelp business-page URL.",
+          "confidence": "documented",
+          "open_questions": [
+            "Current exact pricing tiers change frequently — must be reconfirmed at implementation time via business.yelp.com/data/products/places-api/.",
+            "Approval process/terms for production use beyond the trial were not fully explored."
+          ]
+        },
+        {
+          "api_name": "Foursquare Places API",
+          "rank": 3,
+          "rationale": "Global POI dataset with a straightforward Place Search endpoint, a larger practical free tier for basic ('Pro') fields than Yelp, and — uniquely among the three — directly returns the restaurant's website (and sometimes a menu link) in the same search response, reducing calls needed for task 2.",
+          "docs_links": [
+            "https://docs.foursquare.com/fsq-developers-places/reference/place-search",
+            "https://docs.foursquare.com/data-products/docs/places-api",
+            "https://foursquare.com/pricing/"
+          ],
+          "important_endpoints": "GET https://places-api.foursquare.com/places/search with query, ll (lat,lng), radius (≤100,000m), fsq_category_ids, near, sort, limit(≤50); requires header X-Places-Api-Version. Returns per-place website, tel, email, menu, social_media, hours, price, rating.",
+          "potential_challenges": "Free tier (10,000 calls/month) only covers 'Pro' endpoints/fields; 'Premium' fields (photos, tips, hours, ratings) have no free tier and start at ~$18.75/1,000 calls; API recently rebranded/versioned (X-Places-Api-Version header required) so integrations must pin a version; some Reddit reports of intermittent 'Internal Error' responses suggest API stability should be verified during a trial.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether the 'website' and 'menu' fields are Pro (free-tier) or Premium (paid) fields was not explicitly confirmed in the response-fields breakdown — verify before relying on them for free-tier usage.",
+            "Coverage/freshness of Foursquare's restaurant data outside the US/Europe compared to Google."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose a single tool, e.g. `search_restaurants(area, radius_m?, cuisine?, limit?)`, that internally calls one configured backend (Google Places Nearby/Text Search, Yelp Business Search, or Foursquare Place Search) and returns a normalized list of {name, address, lat, lng, category, phone, rating, price_level, website?, source_id}. Do not expose raw field-mask construction, pagination tokens, or provider-specific filter DSLs to the agent — bake in a sane default field set to control cost. Provide a secondary `get_restaurant_details(source_id)` tool only if the initial search didn't already return a website (mainly needed for Yelp, which lacks websites in search results)."
+    },
+    {
+      "task_description": "Retrieve or confirm each restaurant's public website URL (when not already returned by the discovery search).",
+      "recommended_apis": [
+        {
+          "api_name": "Google Places API (New) — Place Details (websiteUri field)",
+          "rank": 1,
+          "rationale": "Same provider as discovery keeps auth/session simple; websiteUri is a documented, first-class field directly tied to the place record (high confidence of being the business's real site rather than a guess).",
+          "docs_links": [
+            "https://developers.google.com/maps/documentation/places/web-service/nearby-search",
+            "https://developers.google.com/maps/documentation/places/web-service/usage-and-billing"
+          ],
+          "important_endpoints": "Include 'places.websiteUri' in the X-Goog-FieldMask on searchNearby/searchText, or call Place Details GET /v1/places/{id}?fields=websiteUri.",
+          "potential_challenges": "websiteUri triggers the pricier 'Nearby/Text Search Enterprise' SKU ($28-35+/1,000 after free cap of 1,000/month) rather than the cheaper Pro tier used for basic fields — a real cost tradeoff if fetched for every candidate rather than only shortlisted ones.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether it's cheaper to fetch websiteUri only for restaurants the agent decides to scrape, vs. for the full candidate list up front."
+          ]
+        },
+        {
+          "api_name": "Foursquare Places API (website field in Place Search)",
+          "rank": 2,
+          "rationale": "Returns website directly in the same search call used for discovery, avoiding a second API round-trip and its associated cost that Google's approach requires.",
+          "docs_links": [
+            "https://docs.foursquare.com/fsq-developers-places/reference/place-search"
+          ],
+          "important_endpoints": "GET https://places-api.foursquare.com/places/search — response objects include a top-level `website` string field per place.",
+          "potential_challenges": "Coverage/freshness of the website field is unverified at scale; unclear whether it counts as a free 'Pro' field or a paid 'Premium' field — must be confirmed with a live test call before depending on it.",
+          "confidence": "partially_documented",
+          "open_questions": [
+            "Confirm via a live sandbox call whether `website` is populated for a representative sample of restaurants and whether it falls in the free Pro tier."
+          ]
+        },
+        {
+          "api_name": "Fallback: generic web search (e.g. Bing/Google/DuckDuckGo search API) or Firecrawl Search",
+          "rank": 3,
+          "rationale": "When a places API doesn't return a website (notably Yelp, which never exposes it), a lightweight 'restaurant name + address' web search is the standard fallback to locate the official site before scraping it.",
+          "docs_links": [
+            "https://docs.firecrawl.dev/introduction"
+          ],
+          "important_endpoints": "Firecrawl's POST /v2/search endpoint returns web results with URLs and page content in one call, which can double as a website-finder.",
+          "potential_challenges": "Search results may surface aggregator/delivery-platform pages (DoorDash, Yelp itself) instead of the restaurant's own site; requires heuristics (matching domain to business name, preferring non-aggregator domains) to pick the right URL, and adds another paid API dependency.",
+          "confidence": "assumed",
+          "open_questions": [
+            "Whether a cheaper/simpler generic search API (vs. Firecrawl specifically) is preferable purely for URL discovery — not deeply compared here since it's a fallback path only."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Fold this into the same `search_restaurants` tool output when the chosen backend provides it for free (Google with websiteUri field, or Foursquare's website field); otherwise add a narrow `find_official_website(name, address)` tool that runs a web search and applies simple domain-matching heuristics, returning a single best-guess URL plus confidence — never auto-feed unverified URLs into destructive or transactional scraping actions."
+    },
+    {
+      "task_description": "Fetch each restaurant's public website and extract structured menu information (items, descriptions, prices), handling static and JavaScript-rendered pages.",
+      "recommended_apis": [
+        {
+          "api_name": "Firecrawl (Scrape / Extract with JSON schema)",
+          "rank": 1,
+          "rationale": "Purpose-built for turning arbitrary, often JS-heavy websites into clean markdown or schema-conformant JSON in one call, which directly maps to 'give me the menu as {item, description, price}[]' without writing per-site scrapers; handles proxies/anti-bot/JS rendering itself; ships an official MCP server, simplifying integration into this exact agent architecture.",
+          "docs_links": [
+            "https://docs.firecrawl.dev/introduction",
+            "https://docs.firecrawl.dev/developer-guides/usage-guides/choosing-the-data-extractor",
+            "https://www.firecrawl.dev/pricing"
+          ],
+          "important_endpoints": "POST https://api.firecrawl.dev/v2/scrape {url, formats:[\"markdown\", {type:\"json\", schema}]} for single-page schema extraction (ideal for a known menu page URL); POST /v2/crawl to first discover menu-related subpages (e.g. /menu) on a restaurant site; POST /v2/map to enumerate site URLs; POST /v2/extract for multi-URL prompt-driven extraction.",
+          "potential_challenges": "Free tier only 1,000 credits/month (roughly 1,000 page fetches) — will be exhausted quickly scraping many restaurant sites; paid plans start ~$19/month; menus that are images or embedded PDFs, or hosted entirely on third-party platforms (Toast, Square, ChowNow) inside iframes, may still not extract cleanly and need the 'Interact' feature or a PDF parser; schema/LLM-based extraction cost and latency scale with page size.",
+          "confidence": "documented",
+          "open_questions": [
+            "How well schema extraction performs specifically on image-based or PDF menus (a very common restaurant pattern) — not verified in docs.",
+            "Whether crawling a whole restaurant site to find the /menu page (Crawl) vs. directly guessing the URL is more cost-effective at scale."
+          ]
+        },
+        {
+          "api_name": "Diffbot Extract API (Analyze / Article endpoints)",
+          "rank": 2,
+          "rationale": "Mature, computer-vision-based page understanding with no per-site rules, larger free tier (10,000 credits/month) than Firecrawl, useful as a fallback or for high-volume scraping where Firecrawl's free credits are insufficient.",
+          "docs_links": [
+            "https://www.diffbot.com/docs/extract/",
+            "https://www.diffbot.com/pricing"
+          ],
+          "important_endpoints": "GET Diffbot Extract 'Analyze' endpoint (auto-classifies and extracts a page); page-type-specific endpoints (Article, Product, List) as more targeted alternatives when a menu page resembles a product listing.",
+          "potential_challenges": "No dedicated 'menu' or 'restaurant' page-type extractor exists — menus would likely be classified generically (Article/List), requiring custom post-processing to turn Diffbot's generic structured output into clean {item, price} pairs, unlike Firecrawl's caller-defined JSON schema which fits this need more directly; paid tiers ($299/mo+) are notably more expensive than Firecrawl or ScraperAPI at scale.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether Diffbot's List or Article extractor actually segments menu items usefully in practice — would need a hands-on trial against a handful of real restaurant menu pages."
+          ]
+        },
+        {
+          "api_name": "ScraperAPI (proxy + JS rendering, generic HTML fetch)",
+          "rank": 3,
+          "rationale": "Lower-level alternative for simply retrieving rendered HTML from JS-heavy or anti-bot-protected restaurant sites when full LLM-based structured extraction (Firecrawl/Diffbot) is unnecessary or too costly; the agent's own LLM can then parse the HTML/markdown for menu items.",
+          "docs_links": [
+            "https://docs.scraperapi.com/javascript-rendering/overview"
+          ],
+          "important_endpoints": "GET https://api.scraperapi.com?api_key=...&render=true&url=<target> returns rendered page HTML (headless-browser rendering available as an add-on option).",
+          "potential_challenges": "Only handles fetching/rendering, not structured extraction — the calling agent must still parse menu items out of raw HTML itself, shifting complexity back into the MCP server/agent logic; JS rendering costs extra credits on top of base request cost; pricing/plan details were not independently verified here beyond third-party comparison snippets.",
+          "confidence": "assumed",
+          "open_questions": [
+            "ScraperAPI's exact pricing tiers and free-tier limits were not fetched from an official pricing page in this research — verify before adopting.",
+            "Whether combining ScraperAPI (fetch) + the agent's own LLM (parse) is materially cheaper than Firecrawl's all-in-one schema extraction at the expected scale."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose one composable tool, e.g. `extract_menu(url, restaurant_name?)`, that (a) optionally crawls/maps the site briefly to locate a menu-specific subpage if `url` is just the homepage, then (b) calls a schema-based extraction (Firecrawl JSON mode preferred, Diffbot as a documented fallback) with a fixed menu schema (items: [{name, description, price, category}]), returning normalized JSON plus the source URL and a raw-markdown fallback for cases where structured extraction fails (e.g. image/PDF menus). Do NOT expose generic crawl/interact/browser-automation primitives (arbitrary clicking, form-filling, or full-site crawls with high page limits) directly to the agent — these are costly, can be misused to interact with ordering/checkout flows on live restaurant sites, and should be hidden behind the single bounded `extract_menu` tool with server-side limits (e.g. crawl depth ≤ 2, max pages ≤ 5) to control cost and reduce risk."
+    }
+  ],
+  "cross_task_notes": "All three tasks share one pipeline: a places API call returns restaurant candidates (ideally including a website field) for task 1/2, and those website URLs are handed directly to a scraping/extraction tool for task 3. Google Places, Yelp, and Foursquare all require separate API keys/auth and have distinct billing models, so an MCP server should normalize their outputs into one common \"Restaurant\" schema (name, address, lat/lng, category, phone, rating, website) regardless of which backend is used, so downstream menu-scraping tools don't need to know which places API produced the candidate. Foursquare is notable for returning a \"website\" (and even a \"menu\" link) field directly in Place Search, which can shortcut task 2 for many restaurants and should be tried before falling back to a general web search for the site. Rate limits and cost are the dominant integration risk everywhere: Yelp's pricing is per-call and has been publicly criticized as opaque/expensive; Google's per-field SKU billing means naively requesting \"*\" fields can be very costly; Firecrawl's free tier (1,000 pages/month) will exhaust quickly if crawling many restaurant sites, so a paid tier or Diffbot's larger free tier should be budgeted for at meaningful scale. Because scraping is inherently more failure-prone (paywalls, robots.txt, anti-bot, PDF/image-only menus, third-party ordering iframes), the MCP layer should expose scraping as a bounded, cacheable \"fetch_menu(url)\" tool with a JSON schema for menu items, not raw HTML/browser control, and should never expose crawling/interaction primitives that could be used to submit orders, fill forms, or otherwise act destructively on a live restaurant site."
+}
