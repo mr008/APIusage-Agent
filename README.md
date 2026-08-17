@@ -50,6 +50,7 @@ final report:
 | `restaurant-menus.*` | places search + web scraping | Sonnet 5 | Found Google's field-mask SKU pricing trap; flagged that Yelp never returns the restaurant's own website; MCP design explicitly excludes browser/ordering primitives |
 | `github-slack-digest.*` | event polling + LLM step + messaging | Sonnet 5 | Ranked "agent-native summarization (no API)" above external LLM APIs; compared polling vs. webhooks |
 | `trip-planner.*` | flights + weather + visa | Opus 5 | Independently added a 4th task (city-name → IATA/geo identifier resolution) that the query never mentioned |
+| `order-updates.*` | deliberately ambiguous one-liner | Sonnet 5 | Paused to ask a clarifying question (channels? commerce platform?) before researching; run was non-interactive, so it proceeded on stated assumptions and recorded the ambiguity as open questions |
 
 Reproduce with, e.g.:
 
