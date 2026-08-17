@@ -31,7 +31,11 @@ npm start -- "I want to build an agent that finds restaurants in a given area an
 ```
 
 Or run `npm start` with no arguments for an interactive prompt. The agent may
-pause mid-run to ask a clarifying question; answer in the terminal.
+pause mid-run to ask a clarifying question — when the plausible answers are
+enumerable it presents them as an arrow-key picker (space toggles choices on
+multi-select questions), always with an "Other" choice that lets you type a
+free-form answer instead. In non-interactive contexts (piped stdin, CI) it
+skips the prompt and records the ambiguity as open questions in the report.
 
 Outputs:
 

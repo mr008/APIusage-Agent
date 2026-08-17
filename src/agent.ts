@@ -9,7 +9,7 @@ const MODEL = process.env.AGENT_MODEL ?? "claude-opus-5";
 
 export type AgentOptions = {
   /** Called when the agent uses the ask_user tool. Resolves with the user's answer. */
-  askUser: (question: string) => Promise<string>;
+  askUser: (question: string, options: string[], multiSelect: boolean) => Promise<string>;
   trace: Trace;
   maxIterations?: number;
   /** Extra iterations granted after the budget runs out, reserved for finalizing. */
@@ -208,7 +208,8 @@ async function executeTool(
         return { content: "Finding recorded.", isError: false };
       }
       case "ask_user": {
-        const answer = await opts.askUser(String(input.question));
+        const options = Array.isArray(input.options) ? input.options.map(String).slice(0, 5) : [];
+        const answer = await opts.askUser(String(input.question), options, Boolean(input.multi_select));
         return { content: `User's answer: ${answer}`, isError: false };
       }
       case "finalize_report": {

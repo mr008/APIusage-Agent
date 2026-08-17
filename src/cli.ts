@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline/promises";
+import { input, select, checkbox } from "@inquirer/prompts";
 import { runAgent } from "./agent.js";
 import { Trace } from "./trace.js";
 
@@ -14,6 +14,46 @@ function loadDotenv(file = ".env"): void {
   }
 }
 
+const OTHER = "__other__";
+const NO_ANSWER = "(no answer — use your best judgment)";
+
+/**
+ * Claude-style clarifying questions: when the agent supplies answer options,
+ * render an arrow-key picker (checkbox for multi-select) with an "Other"
+ * escape hatch for typing a longer free-form answer.
+ */
+async function askInteractive(question: string, options: string[], multiSelect: boolean): Promise<string> {
+  console.log("");
+  if (options.length === 0) {
+    return (await input({ message: question })).trim() || NO_ANSWER;
+  }
+  if (multiSelect) {
+    const picked = await checkbox<string>({
+      message: `${question} (space to toggle, enter to confirm)`,
+      choices: [
+        ...options.map((o) => ({ name: o, value: o })),
+        { name: "Other / add details (type it)", value: OTHER },
+      ],
+    });
+    const extra = picked.includes(OTHER)
+      ? (await input({ message: "Your answer / extra details:" })).trim()
+      : "";
+    const parts = [...picked.filter((p) => p !== OTHER), extra].filter(Boolean);
+    return parts.length ? parts.join("; ") : NO_ANSWER;
+  }
+  const picked = await select<string>({
+    message: question,
+    choices: [
+      ...options.map((o) => ({ name: o, value: o })),
+      { name: "Other (type my own answer)", value: OTHER },
+    ],
+  });
+  if (picked === OTHER) {
+    return (await input({ message: "Your answer:" })).trim() || NO_ANSWER;
+  }
+  return picked;
+}
+
 async function main(): Promise<void> {
   loadDotenv();
   for (const key of ["ANTHROPIC_API_KEY", "FIRECRAWL_API_KEY"]) {
@@ -23,13 +63,14 @@ async function main(): Promise<void> {
     }
   }
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
   // Goal from argv (quoted string) or interactive prompt.
   let goal = process.argv.slice(2).join(" ").trim();
+  if (!goal && !process.stdin.isTTY) {
+    console.error('No goal provided. Non-interactive usage: npm start -- "<goal>"');
+    process.exit(1);
+  }
   if (!goal) {
-    console.log("Describe the agent workflow you want to build (one line):");
-    goal = (await rl.question("> ")).trim();
+    goal = (await input({ message: "Describe the agent workflow you want to build:" })).trim();
   }
   if (!goal) {
     console.error("No goal provided.");
@@ -42,13 +83,13 @@ async function main(): Promise<void> {
   try {
     const { report, state, usage } = await runAgent(goal, {
       trace,
-      askUser: async (question) => {
-        console.log(`\n\n[agent asks] ${question}`);
+      askUser: async (question, options, multiSelect) => {
         if (!process.stdin.isTTY) {
           // Non-interactive run (CI, piped): don't hang on stdin.
+          console.log(`\n[agent asks] ${question}`);
           return "(non-interactive run — no user available; use your best judgment and record the ambiguity as an open question)";
         }
-        return (await rl.question("> ")).trim() || "(no answer — use your best judgment)";
+        return askInteractive(question, options, multiSelect);
       },
       onText: (delta) => process.stdout.write(delta),
       onToolCall: (name, input) => {
@@ -72,11 +113,14 @@ async function main(): Promise<void> {
         `${usage.inputTokens} uncached input / ${usage.cacheReadTokens} cache-read / ${usage.cacheWriteTokens} cache-write / ${usage.outputTokens} output tokens.`
     );
   } catch (err) {
-    console.error(`\nRun failed: ${err instanceof Error ? err.message : err}`);
+    if (err instanceof Error && err.name === "ExitPromptError") {
+      console.error("\nCancelled.");
+    } else {
+      console.error(`\nRun failed: ${err instanceof Error ? err.message : err}`);
+    }
     process.exitCode = 1;
   } finally {
     trace.close();
-    rl.close();
   }
 }
 

@@ -134,11 +134,21 @@ export const toolDefinitions: Anthropic.Tool[] = [
   {
     name: "ask_user",
     description:
-      "Ask the user a clarifying question. Use ONLY when ambiguity would materially change your recommendations (e.g. budget constraints, expected scale, region, whether official-API-only is required). Do not ask questions you can resolve by research. The loop pauses until the user answers.",
+      "Ask the user a clarifying question. Use ONLY when ambiguity would materially change your recommendations (e.g. budget constraints, expected scale, region, whether official-API-only is required). Do not ask questions you can resolve by research. Provide 2-5 short answer options whenever the plausible answers are enumerable — the UI renders them as an arrow-key picker and always appends an 'Other (type my own answer)' choice, so options make answering much faster for the user. Set multi_select=true when several options can apply at once (e.g. notification channels). Ask one question per call. The loop pauses until the user answers.",
     input_schema: {
       type: "object",
       properties: {
         question: { type: "string" },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "2-5 concise answer choices (a few words each). Omit only for fully open-ended questions.",
+        },
+        multi_select: {
+          type: "boolean",
+          description: "Allow the user to select multiple options (default false).",
+        },
       },
       required: ["question"],
     },
