@@ -51,10 +51,10 @@ final report:
 
 | Example | Query shape | Model | Notable behavior |
 |---|---|---|---|
-| `restaurant-menus.*` | places search + web scraping | Sonnet 5 | Found Google's field-mask SKU pricing trap; flagged that Yelp never returns the restaurant's own website; MCP design explicitly excludes browser/ordering primitives |
+| `restaurant-menus.*` | places search + web scraping (the brief's own example) | Opus 5 | Read 17 doc pages incl. Google's *policies* page, then asked a policy-driven clarifying question (store data vs. fetch live — materially changes provider viability); six-tool MCP pipeline design |
 | `github-slack-digest.*` | event polling + LLM step + messaging | Sonnet 5 | Ranked "agent-native summarization (no API)" above external LLM APIs; compared polling vs. webhooks |
 | `trip-planner.*` | flights + weather + visa | Opus 5 | Independently added a 4th task (city-name → IATA/geo identifier resolution) that the query never mentioned |
-| `order-updates.*` | deliberately ambiguous one-liner | Sonnet 5 | Paused to ask a clarifying question (channels? commerce platform?) before researching; run was non-interactive, so it proceeded on stated assumptions and recorded the ambiguity as open questions |
+| `order-updates.*` | deliberately ambiguous one-liner | Opus 5 | Paused to ask a clarifying question **with proposed answer options** (rendered as an arrow-key picker in interactive runs); run was non-interactive, so it proceeded on stated assumptions, added carrier-tracking and deliverability tasks on its own, and recorded the ambiguity as open questions |
 
 Reproduce with, e.g.:
 

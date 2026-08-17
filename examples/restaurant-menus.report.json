@@ -1,166 +1,286 @@
 {
-  "workflow_summary": "The developer wants to build an agent that (1) discovers restaurants located in a user-specified geographic area, (2) identifies each restaurant's public website, and (3) visits those websites to fetch and extract menu information (dish names, prices, categories). This requires combining a places/business-search API for discovery with a web scraping/content-extraction API for the unstructured, highly heterogeneous task of reading menus off arbitrary restaurant websites (which are often JS-rendered, image-based PDFs, or third-party ordering platforms).",
+  "workflow_summary": "The developer wants an agent that (a) takes a geographic area as input, (b) discovers restaurants within it, (c) resolves each restaurant's official public website, and (d) fetches and extracts menu information (sections, dish names, descriptions, prices) from those websites. No mainstream API returns dish-level menu data for arbitrary restaurants, so the workflow necessarily splits into a places-data leg (geocode area → POI search → place details incl. website URL) and a web-extraction leg (discover the menu page on the restaurant's own site → render/convert it to clean text or PDF-parsed text → parse into a structured menu schema). The report compares official APIs for each leg and flags the licensing/caching/rate-limit realities that dominate this particular workflow.",
   "tasks": [
     {
-      "task_description": "Find restaurants in a given geographic area (location-based business/place search).",
+      "task_description": "Resolve the user's area input (city name, neighbourhood, postcode, free text) into coordinates and/or a bounding box or polygon that downstream POI search can consume.",
       "recommended_apis": [
         {
-          "api_name": "Google Places API (New) — Nearby Search / Text Search",
+          "api_name": "Nominatim (OpenStreetMap)",
           "rank": 1,
-          "rationale": "Most comprehensive and globally consistent restaurant/POI coverage, native support for radius/lat-lng search and restaurant type filtering, and rich optional fields (hours, rating, price level, website) via field masks. Widely used and well documented, with a modern JSON REST interface.",
+          "rationale": "The only widely available geocoder that returns both a bounding box and (via polygon_geojson) the true administrative polygon of an area, which is exactly what you need to constrain a restaurant sweep to 'this neighbourhood' rather than a crude radius. Free and no key. Best used self-hosted or via a commercial OSM-based provider (e.g. Geoapify, which also serves the POI search) rather than hammering the public instance.",
           "docs_links": [
-            "https://developers.google.com/maps/documentation/places/web-service/nearby-search",
-            "https://developers.google.com/maps/documentation/places/web-service/overview",
-            "https://developers.google.com/maps/billing-and-pricing/pricing"
+            "https://nominatim.org/release-docs/latest/api/Search/",
+            "https://operations.osmfoundation.org/policies/nominatim/"
           ],
-          "important_endpoints": "POST https://places.googleapis.com/v1/places:searchNearby (search by lat/lng circle + includedTypes=['restaurant']); POST .../places:searchText for free-text/area queries; GET https://places.googleapis.com/v1/places/{place_id} (Place Details) for enriched fields. All require X-Goog-Api-Key and a mandatory X-Goog-FieldMask.",
-          "potential_challenges": "Field-mask-based SKU billing means requesting more fields (e.g. websiteUri, rating, hours) jumps you from the cheaper 'Pro' SKU tier to costlier 'Enterprise'/'Enterprise+Atmosphere' tiers ($28-40+ per 1,000 calls above free caps); mandatory API key tied to a billed Google Cloud project; no results returned without an explicit field mask; only 1,000 free calls/month at Enterprise tier.",
+          "important_endpoints": "GET https://nominatim.openstreetmap.org/search with either q= (free-form) or structured params (city, state, country, postalcode); format=jsonv2|geojson; addressdetails=1; polygon_geojson=1 to get the area polygon; countrycodes= as a hard country filter; limit up to 40. Each result carries lat, lon and a boundingbox array.",
+          "potential_challenges": "The public instance's usage policy is the main obstacle: hard cap of 1 request/second, mandatory identifying User-Agent/Referer, mandatory ODbL attribution, mandatory client-side caching, and long-running or periodic scripts capped at 4 requests/minute on a single thread and single machine. 'Systematic queries' and 'downloading all POIs in an area' are explicitly forbidden and grounds for a ban, and reselling geocoding results is prohibited. Commercial use is told to self-host or use a commercial provider.",
           "confidence": "documented",
           "open_questions": [
-            "Exact free-tier call caps for the specific fields this workflow needs (name/address/location vs. website/hours) should be re-verified against the live pricing page before committing.",
-            "Whether Text Search or Nearby Search is preferable for 'a given area' phrased as a place name vs. coordinates — Text Search handles natural-language areas better."
+            "Whether the developer will self-host Nominatim or use a commercial OSM geocoder — the public endpoint is not viable for anything beyond prototyping under its own policy.",
+            "Whether polygon_geojson output for the target areas is precise enough, since OSM administrative boundaries vary in quality by country."
           ]
         },
         {
-          "api_name": "Yelp Fusion / Yelp Places API",
+          "api_name": "Google Geocoding API",
           "rank": 2,
-          "rationale": "Purpose-built for exactly this restaurant-discovery use case (term/category/location search, price level, open-now filters) with a simple REST GET interface and a genuine free tier for low volume.",
+          "rationale": "Commercially supported, high quality, and returns geometry.viewport (NE/SW corners) that maps cleanly onto a bounding-box POI search. It is the natural choice if you already commit to Google Places for POI search, since it shares one API key and returns a place_id that chains directly into Place Details. Downside: no true area polygon, only a rectangular viewport, and it inherits Google Maps Platform caching restrictions.",
           "docs_links": [
-            "https://docs.developer.yelp.com/reference/v3_business_search",
-            "https://docs.developer.yelp.com/docs/places-intro",
-            "https://business.yelp.com/data/products/places-api/",
-            "https://docs.developer.yelp.com/docs/places-rate-limiting"
+            "https://developers.google.com/maps/documentation/geocoding/requests-geocoding",
+            "https://developers.google.com/maps/documentation/places/web-service/policies"
           ],
-          "important_endpoints": "GET https://api.yelp.com/v3/businesses/search (location/lat-lng, term, categories, radius, price, open_now, sort_by, limit≤50); GET /v3/businesses/{id} for details; GET /v3/businesses/{id}/reviews.",
-          "potential_challenges": "Default access capped at 5,000 calls/24hr (30,000/month); beyond the 30-day trial, paid plans are reportedly expensive and pricing has been criticized publicly as opaque (TechCrunch, Aug 2024); several useful filters (ambience, accepts_credit_cards) are gated behind a 'Yelp Places Premium Plan'; does not expose the restaurant's own website URL (see task 2 below), only a Yelp business-page URL.",
+          "important_endpoints": "GET https://maps.googleapis.com/maps/api/geocode/json?address=<area>&key=KEY. Returns results[].geometry.location (lat/lng), geometry.viewport.northeast/southwest (usable bbox), place_id, address_components. Optional components= (hard restriction), bounds= and region= (biasing), language=.",
+          "potential_challenges": "Requires a billed Google Cloud project. Docs explicitly warn that the address parameter is not for business names or categories combined with a location ('Tesco near Dallas, Texas') — do not try to use geocoding as a restaurant finder. Geocoding API v4 is now GA, so building on the v3 endpoint documented here means a future migration. Google Maps Platform content is subject to caching/storage restrictions and attribution requirements.",
           "confidence": "documented",
           "open_questions": [
-            "Current exact pricing tiers change frequently — must be reconfirmed at implementation time via business.yelp.com/data/products/places-api/.",
-            "Approval process/terms for production use beyond the trial were not fully explored."
+            "Exact per-1000-request price for Geocoding on the current SKU list was not fetched.",
+            "Whether to build directly on v4 rather than the v3 endpoint documented here."
           ]
         },
         {
-          "api_name": "Foursquare Places API",
+          "api_name": "Geoapify Geocoding / Places (place filter)",
           "rank": 3,
-          "rationale": "Global POI dataset with a straightforward Place Search endpoint, a larger practical free tier for basic ('Pro') fields than Yelp, and — uniquely among the three — directly returns the restaurant's website (and sometimes a menu link) in the same search response, reducing calls needed for task 2.",
+          "rationale": "Worth noting as a consolidation option rather than a separate step: Geoapify's Places API accepts a filter=place:<place_id> that searches within a city boundary, so with Geoapify you can go from area name to POIs without a separate bbox-building step. Ranked third only because I verified this on its product page rather than in the endpoint reference.",
           "docs_links": [
-            "https://docs.foursquare.com/fsq-developers-places/reference/place-search",
-            "https://docs.foursquare.com/data-products/docs/places-api",
-            "https://foursquare.com/pricing/"
+            "https://www.geoapify.com/places-api/"
           ],
-          "important_endpoints": "GET https://places-api.foursquare.com/places/search with query, ll (lat,lng), radius (≤100,000m), fsq_category_ids, near, sort, limit(≤50); requires header X-Places-Api-Version. Returns per-place website, tel, email, menu, social_media, hours, price, rating.",
-          "potential_challenges": "Free tier (10,000 calls/month) only covers 'Pro' endpoints/fields; 'Premium' fields (photos, tips, hours, ratings) have no free tier and start at ~$18.75/1,000 calls; API recently rebranded/versioned (X-Places-Api-Version header required) so integrations must pin a version; some Reddit reports of intermittent 'Internal Error' responses suggest API stability should be verified during a trial.",
-          "confidence": "documented",
+          "important_endpoints": "Places API filter parameter supports rect: (bounding box), circle: (radius), place: (within a city boundary), and geometry from the Isoline API (reachability areas such as '10-minute walk').",
+          "potential_challenges": "Commercial API key required; underlying data is OpenStreetMap so ODbL attribution applies and coverage of small independent restaurants varies by region. I did not verify Geoapify's pricing tiers or rate limits from its docs.",
+          "confidence": "partially_documented",
           "open_questions": [
-            "Whether the 'website' and 'menu' fields are Pro (free-tier) or Premium (paid) fields was not explicitly confirmed in the response-fields breakdown — verify before relying on them for free-tier usage.",
-            "Coverage/freshness of Foursquare's restaurant data outside the US/Europe compared to Google."
+            "Geoapify's free-tier request volume, rate limits and commercial licence terms were not verified.",
+            "Whether Geoapify's geocoding endpoint returns a bbox/polygon equivalent to Nominatim's."
           ]
         }
       ],
-      "mcp_design_recommendation": "Expose a single tool, e.g. `search_restaurants(area, radius_m?, cuisine?, limit?)`, that internally calls one configured backend (Google Places Nearby/Text Search, Yelp Business Search, or Foursquare Place Search) and returns a normalized list of {name, address, lat, lng, category, phone, rating, price_level, website?, source_id}. Do not expose raw field-mask construction, pagination tokens, or provider-specific filter DSLs to the agent — bake in a sane default field set to control cost. Provide a secondary `get_restaurant_details(source_id)` tool only if the initial search didn't already return a website (mainly needed for Yelp, which lacks websites in search results)."
+      "mcp_design_recommendation": "Expose a single tool, resolve_area(query, country_hint?) -> {display_name, center: {lat, lon}, bbox, polygon_geojson?, confidence, source}. Normalise every provider's shape into one output so the search tool downstream never sees provider-specific field names (viewport.northeast vs boundingbox array). Return the top 1–3 candidates with display names so the agent can disambiguate 'Springfield' by asking the user rather than guessing. Do NOT expose reverse geocoding, autocomplete (forbidden on public Nominatim), or raw polygon dumps of large administrative regions — an agent that pulls a country polygon and hands it to POI search will generate an abusive query volume. Enforce provider rate limits (1 req/s, identifying User-Agent, result caching) inside the server, not in the prompt."
     },
     {
-      "task_description": "Retrieve or confirm each restaurant's public website URL (when not already returned by the discovery search).",
+      "task_description": "Find restaurants within the requested geographic area, optionally filtered by cuisine, price, rating or opening hours.",
       "recommended_apis": [
         {
-          "api_name": "Google Places API (New) — Place Details (websiteUri field)",
+          "api_name": "Foursquare Places API",
           "rank": 1,
-          "rationale": "Same provider as discovery keeps auth/session simple; websiteUri is a documented, first-class field directly tied to the place record (high confidence of being the business's real site rather than a guess).",
+          "rationale": "Best fit for this specific workflow because a single search call already returns both `website` and a `menu` URL per place, collapsing tasks 0, 1 and the first half of task 2 into one request. Rich restaurant-relevant filters (categories, price band, open_now/open_at, sort by rating or popularity) and a bounding-box mode. Licensing is materially friendlier than Google's for a project whose whole point is assembling menu data, and Foursquare ships an official MCP server you can study or reuse.",
           "docs_links": [
-            "https://developers.google.com/maps/documentation/places/web-service/nearby-search",
-            "https://developers.google.com/maps/documentation/places/web-service/usage-and-billing"
+            "https://docs.foursquare.com/fsq-developers-places/reference/place-search",
+            "https://foursquare.com/products/places-api/"
           ],
-          "important_endpoints": "Include 'places.websiteUri' in the X-Goog-FieldMask on searchNearby/searchText, or call Place Details GET /v1/places/{id}?fields=websiteUri.",
-          "potential_challenges": "websiteUri triggers the pricier 'Nearby/Text Search Enterprise' SKU ($28-35+/1,000 after free cap of 1,000/month) rather than the cheaper Pro tier used for basic fields — a real cost tradeoff if fetched for every candidate rather than only shortlisted ones.",
-          "confidence": "documented",
+          "important_endpoints": "GET https://places-api.foursquare.com/places/search with required header X-Places-Api-Version (e.g. 2025-06-17). Location via ll+radius (max 100,000 m, default 22,000), ne+sw bounding box, or near='Chicago, IL'. Filters: query, fsq_category_ids, fsq_chain_ids / exclude_all_chains, min_price/max_price (1–4), open_now or open_at (DOWTHHMM), sort=RELEVANCE|RATING|DISTANCE|POPULARITY. fields= selects the response fields; limit max 50, default 10.",
+          "potential_challenges": "limit caps at 50 results per call, so covering a dense city area requires tiling the bbox or issuing multiple category-scoped queries — plan for dedupe by fsq_place_id. Using ne/sw or near suppresses global results. Pricing is pay-as-you-go with roughly 10,000 free calls on select Pro endpoints; Premium fields cost more. The required API-version header means responses can change on version bumps. I did not verify the exact auth scheme (service key vs bearer) or the per-1000-call price from official docs.",
+          "confidence": "partially_documented",
           "open_questions": [
-            "Whether it's cheaper to fetch websiteUri only for restaurants the agent decides to scrape, vs. for the full candidate list up front."
+            "Exact authentication header/format for the current places-api.foursquare.com host (the docs page I read specified only X-Places-Api-Version).",
+            "Official per-call pricing and which fields count as Pro vs Premium.",
+            "Whether Foursquare's terms permit persistent storage of website/menu URLs and derived menu data."
           ]
         },
         {
-          "api_name": "Foursquare Places API (website field in Place Search)",
+          "api_name": "Google Places API (New) — Text Search / Nearby Search",
           "rank": 2,
-          "rationale": "Returns website directly in the same search call used for discovery, avoiding a second API round-trip and its associated cost that Google's approach requires.",
+          "rationale": "Best coverage and freshness of any option, and the most reliable source of a correct official website URL for small independent restaurants. Ranked second purely on integration reality: field-mask-driven billing makes broad sweeps expensive, and the caching policy conflicts with building a stored menu catalogue.",
+          "docs_links": [
+            "https://developers.google.com/maps/documentation/places/web-service/text-search",
+            "https://developers.google.com/maps/documentation/places/web-service/policies"
+          ],
+          "important_endpoints": "POST https://places.googleapis.com/v1/places:searchText with X-Goog-Api-Key and a mandatory X-Goog-FieldMask header. Body params: textQuery, includedType, strictTypeFiltering, locationRestriction / locationBias, minRating, openNow, priceLevels, rankPreference, pageSize + pageToken for pagination. Nearby Search (New) is the sibling endpoint for pure radius queries.",
+          "potential_challenges": "The field mask is required (omitting it errors) and directly drives cost: fields split across Essentials / Pro / Enterprise / Enterprise+Atmosphere SKUs, so requesting websiteUri already pushes you into the Enterprise tier. Docs state the result list 'is not guaranteed to be consistent for identical requests', which complicates reproducible sweeps. Policy forbids pre-fetching, caching or storing Places content (only place_id is exempt), requires publishing ToS and a privacy policy incorporating Google's, and requires Google Maps attribution. Separate EEA terms apply to EEA billing addresses.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether the developer's storage plans can be reconciled with the no-caching policy, or whether a Google-data path must be limited to live per-request lookups.",
+            "Current dollar cost per 1,000 Text Search calls at the Enterprise field tier."
+          ]
+        },
+        {
+          "api_name": "Geoapify Places API (OpenStreetMap-backed)",
+          "rank": 3,
+          "rationale": "Cheapest and most permissive option for exhaustive area sweeps, with the most expressive cuisine taxonomy (catering.restaurant.italian) and genuinely useful dietary/amenity conditions (vegan.only, internet_access) that map well onto menu-oriented use cases. Limitation: OSM POI records often lack a website tag for small venues, so the website-resolution step (task 1) will have gaps you must fill by web search.",
+          "docs_links": [
+            "https://www.geoapify.com/places-api/"
+          ],
+          "important_endpoints": "GET https://api.geoapify.com/v2/places?categories=catering.restaurant&filter=rect:lon1,lat1,lon2,lat2&limit=100&apiKey=KEY. filter also supports circle:, place: (city boundary) and isoline geometries; bias= for proximity ranking; conditions narrow results. Returns a GeoJSON FeatureCollection with place_id per feature. A separate Place Details API returns contact info and opening hours for one place.",
+          "potential_challenges": "Data is OpenStreetMap under ODbL — attribution and share-alike obligations apply to derived datasets, which matters if you publish a menu catalogue. Coverage and website-tag completeness vary sharply by country and by how active local mappers are. I read the product page rather than the API reference, so exact limit ceilings, pagination behaviour, rate limits and pricing tiers are unverified.",
+          "confidence": "partially_documented",
+          "open_questions": [
+            "Geoapify pricing, free-tier volume and rate limits.",
+            "What fraction of catering.restaurant features actually carry a website tag in the developer's target region."
+          ]
+        },
+        {
+          "api_name": "Overpass API (OpenStreetMap)",
+          "rank": 4,
+          "rationale": "The only option that gives genuinely exhaustive 'every restaurant in this polygon' results rather than a ranked best-match list — Nominatim's own docs redirect you here for that. Include it only as a self-hosted batch/backfill path, not as the interactive search backend.",
+          "docs_links": [
+            "https://dev.overpass-api.de/overpass-doc/en/preface/commons.html",
+            "https://nominatim.org/release-docs/latest/api/Search/"
+          ],
+          "important_endpoints": "POST/GET to an Overpass endpoint with an Overpass QL query, e.g. [timeout:90]; nwr[amenity=restaurant]({{bbox}}); out center; — prefix declarations [timeout:N] and [maxsize:N] control the server's admission decision (defaults 180 s and 512 MiB).",
+          "potential_challenges": "Public instances are explicitly not for production apps: guidance is max ~10,000 requests/day and under 1 GB/day, per-IP slot-based rate limiting with cool-downs, 429 on rate denial and 504 when a request would exceed available resources. 'Stitching bounding boxes' and 'setting up an app for more than just OSM mappers and relying on the public instances as backend' are named as problematic behaviour; the docs tell such users to self-host or use a planet dump. Overpass QL is also a bespoke query language, which is awkward to expose safely to an LLM.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether the developer is willing to run a self-hosted Overpass or OSM extract, which is the only compliant way to use it at scale."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose one tool per intent, not one tool per provider: find_restaurants(area_or_bbox, cuisine?, price_range?, open_now?, min_rating?, limit, cursor?) -> [{id, name, address, lat, lon, categories, website?, menu_url?, rating?, price?, source, attribution}]. Force an explicit `limit` with a server-enforced ceiling and return an opaque `cursor` for pagination, so an agent cannot accidentally trigger a whole-city sweep in one call. Normalise Foursquare's fsq_place_id, Google's place_id and Geoapify's place_id into one namespaced `id` (e.g. 'fsq:...', 'gmp:...') so task 1 and task 2 tools can accept it. Hide the provider-specific taxonomies behind a small cuisine enum and translate internally to fsq_category_ids / includedType / catering.restaurant.* . Always return the `attribution` string alongside results so the calling agent can satisfy Google/ODbL display requirements. Do NOT expose Overpass QL as a free-text query tool, do not expose Google's field mask directly (the server should choose a minimal cost-appropriate mask), and do not expose any write/contribution endpoints such as Foursquare's Placemaker suggest/merge."
+    },
+    {
+      "task_description": "For a specific restaurant, retrieve its official website URL plus supporting metadata (phone, address, hours, price level) needed to locate and date-stamp the menu.",
+      "recommended_apis": [
+        {
+          "api_name": "Foursquare Places API",
+          "rank": 1,
+          "rationale": "Uniquely valuable here: the place object exposes both `website` and a dedicated `menu` field holding a menu URL, which is precisely the hand-off point into the scraping leg. Because these come back in the search response, you can often skip a details round-trip entirely, halving call volume and cost.",
           "docs_links": [
             "https://docs.foursquare.com/fsq-developers-places/reference/place-search"
           ],
-          "important_endpoints": "GET https://places-api.foursquare.com/places/search — response objects include a top-level `website` string field per place.",
-          "potential_challenges": "Coverage/freshness of the website field is unverified at scale; unclear whether it counts as a free 'Pro' field or a paid 'Premium' field — must be confirmed with a live test call before depending on it.",
+          "important_endpoints": "The place object returned by /places/search (and the place-details endpoint) includes website, menu, tel, email, hours{display, open_now, regular[{day, open, close}]}, hours_popular, location{address, locality, region, postcode, country, formatted_address}, rating, price, social_media{instagram, facebook_id, twitter}, attributes{delivery, reservations, outdoor_seating, wifi, takes_credit_card}, date_refreshed, and related_places{parent, children}. Use fields= to request only what you need.",
+          "potential_challenges": "The `menu` field is a URL, not menu content — it frequently points to a third-party ordering platform (delivery aggregator, reservation site) rather than the restaurant's own page, so the agent must decide whether that counts as a 'public website'. Freshness of website/menu URLs is crowd-and-partner-derived; date_refreshed should be surfaced. Premium fields may cost more than Pro fields. I did not verify field-level pricing or the retention terms for stored website/menu URLs.",
           "confidence": "partially_documented",
           "open_questions": [
-            "Confirm via a live sandbox call whether `website` is populated for a representative sample of restaurants and whether it falls in the free Pro tier."
+            "How often the `menu` field is populated for independent restaurants versus chains.",
+            "Whether Foursquare's terms allow persisting website/menu URLs and derived menu content."
           ]
         },
         {
-          "api_name": "Fallback: generic web search (e.g. Bing/Google/DuckDuckGo search API) or Firecrawl Search",
-          "rank": 3,
-          "rationale": "When a places API doesn't return a website (notably Yelp, which never exposes it), a lightweight 'restaurant name + address' web search is the standard fallback to locate the official site before scraping it.",
+          "api_name": "Google Places API (New) — Place Details",
+          "rank": 2,
+          "rationale": "The most accurate source of a restaurant's real websiteUri and canonical opening hours, which matters because the whole downstream pipeline fails if the website URL is wrong. Use it as a targeted enrichment step for places where a cheaper provider had no website, rather than as the default for every result.",
           "docs_links": [
-            "https://docs.firecrawl.dev/introduction"
+            "https://developers.google.com/maps/documentation/places/web-service/place-details",
+            "https://developers.google.com/maps/documentation/places/web-service/policies"
           ],
-          "important_endpoints": "Firecrawl's POST /v2/search endpoint returns web results with URLs and page content in one call, which can double as a website-finder.",
-          "potential_challenges": "Search results may surface aggregator/delivery-platform pages (DoorDash, Yelp itself) instead of the restaurant's own site; requires heuristics (matching domain to business name, preferring non-aggregator domains) to pick the right URL, and adds another paid API dependency.",
-          "confidence": "assumed",
+          "important_endpoints": "GET https://places.googleapis.com/v1/places/{PLACE_ID} with X-Goog-Api-Key and X-Goog-FieldMask. Relevant fields: websiteUri, nationalPhoneNumber/internationalPhoneNumber, regularOpeningHours, currentOpeningHours, priceLevel, priceRange, rating, userRatingCount (Enterprise SKU); editorialSummary, servesLunch/servesDinner/servesVegetarianFood, menuForChildren, reviews, takeout, delivery, dineIn, reservable (Enterprise+Atmosphere SKU).",
+          "potential_challenges": "There is no dish-level menu field anywhere in the Place object — menuForChildren is a boolean amenity flag, not a menu. websiteUri sits in the Enterprise SKU and the serves*/editorialSummary flags sit in the most expensive Enterprise+Atmosphere SKU, so a naive fields=* mask is very costly at scale. Caching/storage of the returned content is prohibited except for place_id, and attribution plus published ToS/privacy policy are required. EEA billing addresses fall under separate terms.",
+          "confidence": "documented",
           "open_questions": [
-            "Whether a cheaper/simpler generic search API (vs. Firecrawl specifically) is preferable purely for URL discovery — not deeply compared here since it's a fallback path only."
+            "Current per-1,000-request price for the Enterprise and Enterprise+Atmosphere Place Details SKUs.",
+            "Whether a short-lived cache of websiteUri is defensible under the caching exceptions, which the policy page references but does not enumerate in the section I read."
+          ]
+        },
+        {
+          "api_name": "Geoapify Place Details API",
+          "rank": 3,
+          "rationale": "Cheap OSM-based enrichment for contact details, address and opening hours when you only need to fill gaps and can tolerate missing fields. Adequate as a fallback tier, not as the primary website resolver.",
+          "docs_links": [
+            "https://www.geoapify.com/places-api/"
+          ],
+          "important_endpoints": "Place Details API takes a place_id returned by the Places API and returns enriched structured data described as covering address, contact information and opening hours, plus the place geometry.",
+          "potential_challenges": "OSM contact/website tags are sparse and stale for small independents, so expect a low website-fill rate. ODbL attribution applies. I only confirmed the capability from the Places API product page, not from the Place Details endpoint reference, so exact field names and pricing are unverified.",
+          "confidence": "partially_documented",
+          "open_questions": [
+            "Exact field list and response schema of Geoapify Place Details.",
+            "Realistic website-tag coverage rate for restaurants in the target region."
           ]
         }
       ],
-      "mcp_design_recommendation": "Fold this into the same `search_restaurants` tool output when the chosen backend provides it for free (Google with websiteUri field, or Foursquare's website field); otherwise add a narrow `find_official_website(name, address)` tool that runs a web search and applies simple domain-matching heuristics, returning a single best-guess URL plus confidence — never auto-feed unverified URLs into destructive or transactional scraping actions."
+      "mcp_design_recommendation": "Expose get_restaurant_details(id) -> {name, address, phone, hours, price_level, website_url?, menu_url?, website_source, last_refreshed, attribution} accepting the namespaced id from find_restaurants. Add a distinct fallback tool resolve_official_website(name, address) that uses a web-search API (e.g. Jina s.jina.ai or a SERP provider) for the substantial fraction of places with no website in the POI database — and have it return a candidate list with confidence rather than a single guess, since sending the pipeline to the wrong domain is the most common failure mode. Critically, the server should classify the resolved URL (own_site | delivery_aggregator | reservation_platform | social_media) and surface that label, because the user asked specifically for menus from public websites and aggregator sites carry their own, often scraping-hostile, terms of service. Do not expose Google's raw field mask; pick a minimal mask internally and add a documented cost note in the tool description."
     },
     {
-      "task_description": "Fetch each restaurant's public website and extract structured menu information (items, descriptions, prices), handling static and JavaScript-rendered pages.",
+      "task_description": "Fetch the restaurant's public website, find the page (or PDF) that holds the menu, and convert it into clean text suitable for parsing.",
       "recommended_apis": [
         {
-          "api_name": "Firecrawl (Scrape / Extract with JSON schema)",
+          "api_name": "Firecrawl",
           "rank": 1,
-          "rationale": "Purpose-built for turning arbitrary, often JS-heavy websites into clean markdown or schema-conformant JSON in one call, which directly maps to 'give me the menu as {item, description, price}[]' without writing per-site scrapers; handles proxies/anti-bot/JS rendering itself; ships an official MCP server, simplifying integration into this exact agent architecture.",
+          "rationale": "The strongest single fit: /v2/map with search:'menu' solves the 'which URL on this site is the menu' problem in one cheap call, and /v2/scrape then handles the hard parts of real restaurant sites — JavaScript-rendered menus (waitFor, actions), PDF menus (parsers:['pdf']), and boilerplate stripping (onlyMainContent). It also has an official MCP server, so tool shapes are already battle-tested.",
           "docs_links": [
-            "https://docs.firecrawl.dev/introduction",
-            "https://docs.firecrawl.dev/developer-guides/usage-guides/choosing-the-data-extractor",
-            "https://www.firecrawl.dev/pricing"
+            "https://docs.firecrawl.dev/api-reference/endpoint/scrape",
+            "https://docs.firecrawl.dev/api-reference/endpoint/map",
+            "https://docs.firecrawl.dev/rate-limits"
           ],
-          "important_endpoints": "POST https://api.firecrawl.dev/v2/scrape {url, formats:[\"markdown\", {type:\"json\", schema}]} for single-page schema extraction (ideal for a known menu page URL); POST /v2/crawl to first discover menu-related subpages (e.g. /menu) on a restaurant site; POST /v2/map to enumerate site URLs; POST /v2/extract for multi-URL prompt-driven extraction.",
-          "potential_challenges": "Free tier only 1,000 credits/month (roughly 1,000 page fetches) — will be exhausted quickly scraping many restaurant sites; paid plans start ~$19/month; menus that are images or embedded PDFs, or hosted entirely on third-party platforms (Toast, Square, ChowNow) inside iframes, may still not extract cleanly and need the 'Interact' feature or a PDF parser; schema/LLM-based extraction cost and latency scale with page size.",
+          "important_endpoints": "POST /v2/map {url, search:'menu', sitemap:'include'|'only'|'skip', includeSubdomains, ignoreQueryParameters, limit, ignoreCache} -> links[{url,title,description}]. POST /v2/scrape {url, formats:['markdown','html','json','summary','screenshot'], onlyMainContent, includeTags, excludeTags, waitFor, actions[], parsers:['pdf'], location{country,languages}, proxy, maxAge, timeout} -> {markdown, links, metadata{title, statusCode, contentType, numPages}}. Both use Authorization: Bearer <token>.",
+          "potential_challenges": "Map, crawl, extract and batch-scrape all require an API key — keyless access covers only Search, Scrape and Parse. Free plan is 2 concurrent browsers and 10 req/min on /scrape and /map, which is far too low for a city sweep; Standard is 50 concurrent / 500 req/min. 429 on either rate or concurrency limit; 402 when credits run out. Credits are consumed per page and JSON/AI extraction costs more than a plain scrape, so per-restaurant cost is the dominant budget line. Sitemap results are cached up to 7 days (ignoreCache to bypass). You remain responsible for robots.txt and each site's terms — Firecrawl does not absolve that.",
           "confidence": "documented",
           "open_questions": [
-            "How well schema extraction performs specifically on image-based or PDF menus (a very common restaurant pattern) — not verified in docs.",
-            "Whether crawling a whole restaurant site to find the /menu page (Crawl) vs. directly guessing the URL is more cost-effective at scale."
+            "Exact credit cost per scrape when the `menu` format is requested versus plain markdown.",
+            "Whether Firecrawl respects robots.txt by default or whether the developer must implement that check themselves.",
+            "The specific numeric keyless daily request/credit caps, which the docs describe qualitatively."
           ]
         },
         {
-          "api_name": "Diffbot Extract API (Analyze / Article endpoints)",
+          "api_name": "Jina Reader API",
           "rank": 2,
-          "rationale": "Mature, computer-vision-based page understanding with no per-site rules, larger free tier (10,000 credits/month) than Firecrawl, useful as a fallback or for high-volume scraping where Firecrawl's free credits are insufficient.",
+          "rationale": "The cheapest and lowest-friction way to turn a known menu URL into clean markdown: prepend r.jina.ai and you are done, with no key needed for prototyping. Native PDF parsing and image captioning are genuinely useful because many restaurant menus are PDFs or images. Ranked second only because it has no site-map/URL-discovery equivalent, so you must find the menu page yourself.",
           "docs_links": [
-            "https://www.diffbot.com/docs/extract/",
-            "https://www.diffbot.com/pricing"
+            "https://jina.ai/reader/"
           ],
-          "important_endpoints": "GET Diffbot Extract 'Analyze' endpoint (auto-classifies and extracts a page); page-type-specific endpoints (Article, Product, List) as more targeted alternatives when a menu page resembles a product listing.",
-          "potential_challenges": "No dedicated 'menu' or 'restaurant' page-type extractor exists — menus would likely be classified generically (Article/List), requiring custom post-processing to turn Diffbot's generic structured output into clean {item, price} pairs, unlike Firecrawl's caller-defined JSON schema which fits this need more directly; paid tiers ($299/mo+) are notably more expensive than Firecrawl or ScraperAPI at scale.",
+          "important_endpoints": "GET https://r.jina.ai/<encoded-target-url> returns LLM-friendly markdown; Accept: application/json returns {url, title, content, timestamp}. Control headers include X-Target-Selector, X-Wait-For-Selector, X-Remove-Selector, X-Timeout, X-Token-Budget, X-Proxy (country), X-No-Cache / X-Cache-Tolerance, X-With-Generated-Alt (VLM image captions), X-Robots-Txt (check robots.txt as a named bot), X-With-Iframe, X-With-Shadow-Dom, X-Respond-With: ReaderLM-v2. https://s.jina.ai/?q= gives web search results as clean text.",
+          "potential_challenges": "No sitemap/link-discovery endpoint, so pair it with a search call or your own crawl to locate the menu page. Keyless use is capped at 20 RPM; a free or paid key raises that to 500 RPM and premium to 5,000 RPM. Billing is by output tokens, so long menu pages cost more, and ReaderLM-v2 costs 3x tokens. s.jina.ai is blocked without a key and each search request carries a fixed floor of 10,000 tokens, making it an expensive way to do bulk website discovery. Robots.txt compliance is opt-in via X-Robots-Txt rather than default.",
           "confidence": "documented",
           "open_questions": [
-            "Whether Diffbot's List or Article extractor actually segments menu items usefully in practice — would need a hands-on trial against a handful of real restaurant menu pages."
+            "Per-token pricing for the paid tiers was not fetched.",
+            "How reliably the default pipeline preserves menu price/dish pairings in table-based or heavily styled layouts."
           ]
         },
         {
-          "api_name": "ScraperAPI (proxy + JS rendering, generic HTML fetch)",
+          "api_name": "Google Places API (New) — as a negative finding",
           "rank": 3,
-          "rationale": "Lower-level alternative for simply retrieving rendered HTML from JS-heavy or anti-bot-protected restaurant sites when full LLM-based structured extraction (Firecrawl/Diffbot) is unnecessary or too costly; the agent's own LLM can then parse the HTML/markdown for menu items.",
+          "rationale": "Recorded explicitly so the developer does not spend time looking: there is no Google (or, as far as this research found, mainstream) API that returns dish-level menu content for arbitrary restaurants. The Place object's closest fields are the boolean menuForChildren and serves* amenity flags. Scraping the restaurant's own site is therefore not a shortcut but the only available route, which is why tasks 2 and 3 exist at all.",
           "docs_links": [
-            "https://docs.scraperapi.com/javascript-rendering/overview"
+            "https://developers.google.com/maps/documentation/places/web-service/place-details"
           ],
-          "important_endpoints": "GET https://api.scraperapi.com?api_key=...&render=true&url=<target> returns rendered page HTML (headless-browser rendering available as an add-on option).",
-          "potential_challenges": "Only handles fetching/rendering, not structured extraction — the calling agent must still parse menu items out of raw HTML itself, shifting complexity back into the MCP server/agent logic; JS rendering costs extra credits on top of base request cost; pricing/plan details were not independently verified here beyond third-party comparison snippets.",
-          "confidence": "assumed",
+          "important_endpoints": "Place Details field list: menuForChildren, servesBreakfast/Lunch/Dinner/Brunch/Dessert, servesBeer/Wine/Cocktails/Coffee, servesVegetarianFood are all booleans in the Enterprise+Atmosphere SKU; websiteUri (Enterprise SKU) is the only pointer toward actual menu content.",
+          "potential_challenges": "Using these boolean flags as a substitute for menu data will not satisfy the requirement. Also note that combining Google-sourced place data with scraped menu content in a stored dataset compounds the Google caching restriction.",
+          "confidence": "documented",
           "open_questions": [
-            "ScraperAPI's exact pricing tiers and free-tier limits were not fetched from an official pricing page in this research — verify before adopting.",
-            "Whether combining ScraperAPI (fetch) + the agent's own LLM (parse) is materially cheaper than Firecrawl's all-in-one schema extraction at the expected scale."
+            "Whether any regional or vertical vendor (e.g. delivery-platform partner APIs) offers licensed dish-level menu feeds — not investigated here and worth a separate look if per-site scraping proves too brittle."
           ]
         }
       ],
-      "mcp_design_recommendation": "Expose one composable tool, e.g. `extract_menu(url, restaurant_name?)`, that (a) optionally crawls/maps the site briefly to locate a menu-specific subpage if `url` is just the homepage, then (b) calls a schema-based extraction (Firecrawl JSON mode preferred, Diffbot as a documented fallback) with a fixed menu schema (items: [{name, description, price, category}]), returning normalized JSON plus the source URL and a raw-markdown fallback for cases where structured extraction fails (e.g. image/PDF menus). Do NOT expose generic crawl/interact/browser-automation primitives (arbitrary clicking, form-filling, or full-site crawls with high page limits) directly to the agent — these are costly, can be misused to interact with ordering/checkout flows on live restaurant sites, and should be hidden behind the single bounded `extract_menu` tool with server-side limits (e.g. crawl depth ≤ 2, max pages ≤ 5) to control cost and reduce risk."
+      "mcp_design_recommendation": "Split this into two composable tools rather than one mega-tool. First, discover_menu_pages(website_url) -> [{url, title, kind: 'html'|'pdf'|'image', score}] backed by Firecrawl /v2/map with search:'menu' plus heuristics for common paths (/menu, /menus, /food, /drinks, /carte, /speisekarte) and PDF links; return ranked candidates, not one answer. Second, fetch_page_text(url, {render?: bool, wait_for?, parse_pdf?: bool}) -> {markdown, status_code, content_type, fetched_at, final_url} backed by Firecrawl /v2/scrape with Jina Reader as a cheap fallback or cost-optimisation path. Keep the fetch tool strictly single-URL and idempotent so the agent's cost is legible and traceable. Enforce inside the server, never in the prompt: a robots.txt check before fetching, per-domain politeness delays and concurrency caps, an allowlist that the URL must resolve to the restaurant's own domain or an explicitly permitted host, and a hard page-count budget per restaurant (typically 1–3). Do NOT expose Firecrawl's full-site /v2/crawl, batch-scrape, or the browser Interact/actions sandbox to the agent — an unbounded crawl is the single easiest way to run up cost, get IP-blocked, and create legal exposure against a small business's website. Also do not expose the `proxy` parameter, since stealth-proxy usage to defeat anti-bot measures is a policy decision, not an agent decision."
+    },
+    {
+      "task_description": "Parse the fetched menu content into structured menu data: sections, dish names, descriptions, prices, currency and dietary tags.",
+      "recommended_apis": [
+        {
+          "api_name": "Firecrawl (native `menu` format)",
+          "rank": 1,
+          "rationale": "Decisively the best fit because menu extraction is a first-class output format, not something you have to design. The documented response schema is already the domain model you would otherwise hand-write: sections with items carrying name, description, structured price {amount, currency, formatted}, dietary tags, calories and option groups, plus an isMenu flag and a confidence score you can threshold on. Getting sections, prices and a confidence signal in the same call that fetched the page removes an entire failure-prone stage from the pipeline.",
+          "docs_links": [
+            "https://docs.firecrawl.dev/api-reference/endpoint/scrape",
+            "https://docs.firecrawl.dev/rate-limits"
+          ],
+          "important_endpoints": "POST /v2/scrape response data.menu = {isMenu, sections[{name, id, description, items[{name, id, description, price{amount, currency, formatted}, images[{url, alt}], availability{inStock, text}, dietary[], calories, optionGroups[], identifiers{merchantItemId}, url, sourceUrl}]}], confidence, merchant{name, type}, currency, sourceUrl}.",
+          "potential_challenges": "The docs page I read shows `menu` in the response schema but I did not confirm the exact request-side flag that enables it (presumably a value in `formats`), nor its credit cost — AI/JSON extraction is documented as costing more credits than a plain scrape. The `confidence` field implies extraction is probabilistic, so you need a threshold plus a fallback path. Locked to Firecrawl as a vendor for the most valuable part of the pipeline, and the same rate/concurrency limits (429) and 402-on-credit-exhaustion apply.",
+          "confidence": "partially_documented",
+          "open_questions": [
+            "The exact request parameter that turns on the `menu` format, and its credit cost per page.",
+            "Accuracy on hard real-world cases: PDF and image-only menus, multi-language menus, prices embedded in images, and 'market price' or per-100g pricing.",
+            "Whether `confidence` is calibrated well enough to use as an automatic accept/reject gate."
+          ]
+        },
+        {
+          "api_name": "OpenAI Structured Outputs (Responses / Chat Completions API)",
+          "rank": 2,
+          "rationale": "The vendor-neutral fallback and quality backstop. Strict JSON-Schema adherence means you define your own menu schema once (currency handling, per-size price variants, allergen vocabulary, 'market price' sentinels) and get guaranteed-shaped output, which matters because menus are far messier than the average extraction target. Also the right tool for reconciling several sources — e.g. merging a PDF menu with an HTML lunch specials page for the same restaurant.",
+          "docs_links": [
+            "https://platform.openai.com/docs/guides/structured-outputs"
+          ],
+          "important_endpoints": "POST /v1/responses with text:{format:{type:'json_schema', name:'menu', strict:true, schema:{...}}}, or POST /v1/chat/completions with response_format:{type:'json_schema', json_schema:{strict:true, schema:{...}}}. SDK helpers accept Pydantic (client.responses.parse(text_format=Menu) -> response.output_parsed) or Zod (zodTextFormat). Supported from GPT-4o / gpt-4o-mini-2024-07-18 snapshots onward; model refusals are programmatically detectable.",
+          "potential_challenges": "Cost scales with input tokens, and menu pages are long — always feed cleaned markdown, never raw HTML. Schema adherence is guaranteed but factual accuracy is not: hallucinated prices are the key risk, so validate that every extracted price string actually appears in the source text before accepting it. There are documented limits on which JSON Schema constructs are supported (the 'supported schemas' section), which constrains deeply nested or union-heavy menu models. Sending scraped third-party content to a model provider has its own data-handling implications.",
+          "confidence": "documented",
+          "open_questions": [
+            "Which JSON Schema features are unsupported in strict mode for a deeply nested menu model (section -> item -> option group -> variant price).",
+            "Token cost per menu page in practice, and whether a smaller model is sufficient once input is clean markdown."
+          ]
+        },
+        {
+          "api_name": "schema.org Menu / MenuItem (embedded JSON-LD on the restaurant's own site)",
+          "rank": 3,
+          "rationale": "Should be the first thing the pipeline tries, even though it is a standard rather than an API: when a site publishes Menu/MenuItem JSON-LD you get authoritative, publisher-authored structured data with zero LLM cost and zero hallucination risk. schema.org reports the Menu type appearing on 100K–1M domains, so the hit rate is low but non-trivial and the payoff per hit is large. Costs nothing to attempt since you already have the HTML.",
+          "docs_links": [
+            "https://schema.org/Menu"
+          ],
+          "important_endpoints": "Parse <script type='application/ld+json'> blocks from the fetched HTML for Menu (hasMenuSection, hasMenuItem) and MenuItem nodes, and Restaurant/FoodEstablishment nodes carrying a hasMenu property. Menu is defined as 'a structured representation of food or drink items available from a FoodEstablishment'.",
+          "potential_challenges": "Coverage is the whole problem: most independent restaurant sites publish no Menu markup, and those that do often omit prices or use inconsistent offers/price nesting. Markup can also be stale relative to the human-readable page. Requires you to request the raw HTML format (not just markdown) from the scraper, and to write and maintain your own JSON-LD normaliser — there is no API to call. Not a standalone solution; strictly a cheap fast path.",
+          "confidence": "documented",
+          "open_questions": [
+            "Actual hit rate for Menu JSON-LD among independent restaurants in the developer's target region.",
+            "How often marked-up menus include prices versus item names only."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose extract_menu(source: {url} | {markdown, source_url}, options?) -> {is_menu, confidence, currency, sections[{name, items[{name, description, price_amount, price_currency, price_raw, dietary[], calories}]}], extraction_method, source_url, fetched_at, warnings[]}. Implement it internally as a cascade — schema.org JSON-LD first (free, authoritative), then Firecrawl's native `menu` format, then OpenAI Structured Outputs against your own schema — and always report which tier produced the result via extraction_method plus a confidence score, so the calling agent can decide whether to trust or escalate. Add a non-negotiable server-side validator that checks each extracted price literal actually occurs in the source text and drops or flags any that do not; this is the cheapest available defence against hallucinated prices, which is the most damaging failure mode for a menu product. Always return source_url and fetched_at so every dish is traceable and staleness is visible. Do NOT expose a tool that answers menu questions directly from a model's own knowledge with no fetched source, and do not expose a free-form 'extract anything with this prompt' tool — keep the schema server-owned so output stays comparable across restaurants and across extraction tiers."
     }
   ],
-  "cross_task_notes": "All three tasks share one pipeline: a places API call returns restaurant candidates (ideally including a website field) for task 1/2, and those website URLs are handed directly to a scraping/extraction tool for task 3. Google Places, Yelp, and Foursquare all require separate API keys/auth and have distinct billing models, so an MCP server should normalize their outputs into one common \"Restaurant\" schema (name, address, lat/lng, category, phone, rating, website) regardless of which backend is used, so downstream menu-scraping tools don't need to know which places API produced the candidate. Foursquare is notable for returning a \"website\" (and even a \"menu\" link) field directly in Place Search, which can shortcut task 2 for many restaurants and should be tried before falling back to a general web search for the site. Rate limits and cost are the dominant integration risk everywhere: Yelp's pricing is per-call and has been publicly criticized as opaque/expensive; Google's per-field SKU billing means naively requesting \"*\" fields can be very costly; Firecrawl's free tier (1,000 pages/month) will exhaust quickly if crawling many restaurant sites, so a paid tier or Diffbot's larger free tier should be budgeted for at meaningful scale. Because scraping is inherently more failure-prone (paywalls, robots.txt, anti-bot, PDF/image-only menus, third-party ordering iframes), the MCP layer should expose scraping as a bounded, cacheable \"fetch_menu(url)\" tool with a JSON schema for menu items, not raw HTML/browser control, and should never expose crawling/interaction primitives that could be used to submit orders, fill forms, or otherwise act destructively on a live restaurant site."
+  "cross_task_notes": "Shared auth and layout: this workflow needs at most three credentials — one places provider (Foursquare service key, or a Google Maps Platform key that also covers Geocoding), one web-extraction provider (Firecrawl Bearer token, optionally a Jina key), and optionally one LLM key for fallback extraction. A single MCP server with six tools covers the whole pipeline: resolve_area -> find_restaurants -> get_restaurant_details (+ resolve_official_website fallback) -> discover_menu_pages -> fetch_page_text -> extract_menu. The natural composition chain is that each tool's output ids/URLs are the next tool's input, so use one namespaced place id ('fsq:...', 'gmp:...', 'geoapify:...') consistently and pass source/attribution through every layer.\n\nThree cross-cutting realities dominate this build. (1) Licensing conflict: Google Places forbids pre-fetching, caching or storing its content beyond place_id, while OSM-derived data (Geoapify, Nominatim, Overpass) is ODbL with attribution and share-alike obligations. If the goal is a persistent menu catalogue, Foursquare or OSM-derived places data plus your own scraped menu content is a cleaner footing than Google; if the goal is live per-request lookup, Google's superior website-URL accuracy is worth the cost. I attempted to confirm the developer's storage intent but no user was available, so this remains the single most important open question: it changes the task-0/task-1 ranking outright.\n\n(2) Fan-out cost and abuse risk: one area query can expand into hundreds of restaurants, each triggering a map call plus one or more scrapes plus an extraction. That multiplies into real money (Firecrawl credits, Google Enterprise-tier fields) and into request volumes that violate public-instance policies (Nominatim 1 req/s, Overpass ~10k/day) and can look like an attack to a small restaurant's host. The MCP server must own the budget: server-enforced result ceilings, opaque cursors instead of unbounded sweeps, per-domain politeness delays and concurrency caps, robots.txt checks, and a hard page-count budget per restaurant. None of this should be delegated to prompt instructions.\n\n(3) Capabilities to deliberately withhold from the agent: Firecrawl's full-site /v2/crawl, batch-scrape and browser Interact/actions sandbox; stealth/proxy parameters; raw Overpass QL; Google's raw field mask; Foursquare's Placemaker write endpoints (suggest/merge/flag, which mutate a shared public dataset); and any free-form 'extract with this prompt' tool. Conversely, two things should always be surfaced that raw APIs do not emphasise: an attribution string per result, and a website_kind classification (own_site vs delivery_aggregator vs reservation_platform vs social_media) — the user asked for menus from restaurants' public websites, and aggregator platforms are both a different data-quality proposition and a much more scraping-hostile terms-of-service environment."
 }

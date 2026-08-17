@@ -1,186 +1,215 @@
 {
-  "workflow_summary": "The developer wants an agent that automatically sends order-status updates (e.g., order confirmed, shipped, delayed, delivered) to their customers. Since the specific channel(s) and backend were not specified by the user, this research assumes a typical setup: order data originates from an e-commerce/order-management backend (Shopify or WooCommerce as representative examples), and updates are pushed to customers via email and/or SMS, with WhatsApp as an optional richer channel — plus a mechanism to confirm messages were actually delivered and to respect opt-outs/bounces.",
+  "workflow_summary": "The developer wants an agent that proactively notifies customers about their orders — e.g. \"order confirmed / paid\", \"shipped with tracking\", \"out for delivery\", \"delayed\", \"delivered\", \"cancelled/refunded\". That decomposes into: (a) getting order and fulfillment state changes out of the commerce platform, (b) enriching shipped orders with normalized carrier tracking status, (c) delivering the message on email, (d) delivering it on SMS/WhatsApp, and (e) templating the message plus tracking whether it actually landed (opens, bounces, delivery receipts). No user was available to answer clarifying questions, so this report covers the two most common order sources (Shopify, WooCommerce) and both email and SMS/WhatsApp channels; the actual platform, channel mix, and region are recorded as open questions.",
   "tasks": [
     {
-      "task_description": "Retrieve order status/shipment data from an e-commerce or order-management backend to know what update to send.",
+      "task_description": "Retrieve order/shipment data and detect status changes from the store's commerce platform (webhooks + order lookup).",
       "recommended_apis": [
         {
-          "api_name": "Shopify Admin API (REST/GraphQL)",
+          "api_name": "Shopify Admin API (GraphQL Admin + Webhooks)",
           "rank": 1,
-          "rationale": "Shopify is one of the most widely used hosted e-commerce platforms; its Admin API exposes order, fulfillment, and customer data needed to compose an update, and supports webhooks (order/updated, fulfillments/create, etc.) for event-driven triggering instead of polling.",
+          "rationale": "Shopify emits webhook topics that map one-to-one onto the customer-facing milestones the agent needs (paid, fulfilled, partially fulfilled, cancelled, fulfillment created/updated, on-hold/released, ready for pickup), so the agent gets a precise trigger instead of having to diff order records. The Order object then supplies everything a message needs in one query (order name, email, phone, fulfillment/financial status, shipping address, statusPageUrl, canNotifyCustomer).",
           "docs_links": [
-            "https://shopify.dev/docs/api/admin-rest/latest/resources/order"
+            "https://shopify.dev/docs/api/webhooks/latest",
+            "https://shopify.dev/docs/api/webhooks/latest?reference=toml",
+            "https://shopify.dev/docs/api/admin-graphql/latest/objects/Order"
           ],
-          "important_endpoints": "GET /admin/api/latest/orders.json (list orders, status=any), GET /admin/api/latest/orders/{order_id}.json (single order incl. fulfillment_status, financial_status), POST for order webhooks subscription (via GraphQL webhookSubscriptionCreate). Order cancel/close/open endpoints exist but are destructive and should not be exposed to a notification agent.",
-          "potential_challenges": "REST Admin API is legacy (frozen Oct 2024); new integrations should target GraphQL Admin API. Requires OAuth app approval/install and access-token scopes (read_orders); only last 60 days of orders visible without a granted read_all_orders scope; reading customer billing/shipping PII requires separate 'protected customer data' approval from Shopify — a real approval/review hurdle for an agent that needs customer contact details.",
+          "important_endpoints": "Webhook subscriptions: declare topics in the app config TOML ([[webhooks.subscriptions]] with topics + uri, including pubsub:// targets) or create shop-specific ones with the GraphQL Admin mutation webhookSubscriptionCreate. Relevant topics: orders/create, orders/paid, orders/updated, orders/fulfilled, orders/partially_fulfilled, orders/cancelled, fulfillments/create, fulfillments/update, fulfillment_orders/placed_on_hold, fulfillment_orders/hold_released, fulfillment_orders/line_items_prepared_for_pickup, fulfillment_orders/rescheduled. Order read: GraphQL Admin `order`/`orders` query selecting name, email, phone, displayFulfillmentStatus, displayFinancialStatus, fulfillments, fulfillmentOrders, shippingAddress, statusPageUrl, canNotifyCustomer.",
+          "potential_challenges": "Requires an app install with the `orders` scope (and `fulfillments`/`*_fulfillment_orders` for shipment topics); customer email/phone are protected customer data, which for App Store apps needs approval and data-handling commitments. Some topics are approval-gated/Plus-only (e.g. audit_events). Shopify itself already sends order confirmation and shipping notification emails, so the agent risks duplicate notifications unless store notifications are disabled or the agent restricts itself to milestones Shopify doesn't cover. GraphQL cost-based rate limiting and webhook retry/duplicate delivery must be handled (idempotency on webhook id).",
           "confidence": "documented",
           "open_questions": [
-            "Which e-commerce platform does the developer actually use (Shopify, WooCommerce, custom, other)?",
-            "Will the agent use REST or is it required to migrate to GraphQL Admin API for new integrations?",
-            "Does the developer need historical (>60 day) order access, requiring extra scope approval?"
+            "Is the store actually on Shopify? (unconfirmed — no user answer available.)",
+            "Exact HMAC verification header/retry policy for Shopify webhooks was not re-verified on this pass.",
+            "Whether the merchant will disable Shopify's built-in customer notifications to avoid double-messaging."
           ]
         },
         {
-          "api_name": "WooCommerce REST API",
+          "api_name": "WooCommerce REST API v3 (Orders + Webhooks)",
           "rank": 2,
-          "rationale": "For self-hosted WordPress/WooCommerce stores, this is the direct equivalent of Shopify's Admin API — exposes orders with status field (pending/processing/completed/etc.) needed to determine what update to send, with no third-party app-review process since the merchant controls their own keys.",
+          "rationale": "The right choice for self-hosted WordPress stores: simple key/secret auth, an /orders resource with the full order payload, and webhook CRUD from the same API. It is weaker than Shopify for this workflow because there are no per-status topics — only order.created/updated/deleted — so the agent must persist previous status and diff it, and webhook delivery reliability depends on the store's wp-cron.",
           "docs_links": [
-            "https://developer.woocommerce.com/docs/apis/rest-api/"
+            "https://developer.woocommerce.com/docs/apis/rest-api",
+            "https://developer.woocommerce.com/docs/apis/rest-api/v2/webhooks/"
           ],
-          "important_endpoints": "GET /wp-json/wc/v3/orders (list, filterable by status), GET /wp-json/wc/v3/orders/{id} (single order with status, line_items, billing/shipping). No official push webhooks are documented on this page (WooCommerce does support webhooks separately via wp-admin UI) so polling or store-side webhook configuration is needed.",
-          "potential_challenges": "Self-hosted means reliability/uptime is the merchant's responsibility; requires Basic Auth consumer key/secret which must be transmitted over HTTPS (or exposed in query string as fallback, less secure); versioning/plugin updates can break custom integrations; no automatic delivery-status linkage to notifications (must be built by the MCP layer).",
+          "important_endpoints": "GET /wp-json/wc/v3/orders (and /orders/{id}) with status/date filters, per_page/page pagination and X-WP-Total headers, for the polling fallback and enrichment. POST/GET/PUT/DELETE /wp-json/wc/v3/webhooks (plus /webhooks/batch) with {name, topic: order.created|order.updated|order.deleted, delivery_url, secret, status}; delivery logs readable per webhook. Webhook requests carry X-WC-Webhook-Topic/-Resource/-Event and X-WC-Webhook-Signature (base64 HMAC-SHA256 of the body).",
+          "potential_challenges": "Auth is consumer key/secret over HTTP Basic and some hosts strip the Authorization header (documented query-string workaround) — a credential-leak footgun. Delivery is via wp_remote_post on wp-cron in the background, only the 25 most recent delivery logs are kept, and after 5 consecutive non-2xx responses the webhook is auto-disabled and must be re-enabled through the API, so the agent needs health monitoring plus a polling fallback. order.updated fires on many hooks, so duplicate/noisy events are expected and status diffing plus idempotency keys are mandatory.",
           "confidence": "documented",
           "open_questions": [
-            "Does the store have WooCommerce webhooks configured/enabled, or will the agent need to poll periodically?"
+            "No documented retry/backoff for a single failed delivery was found beyond the 5-strike disable rule.",
+            "Whether shipment tracking numbers are available in the order payload depends on which tracking plugin the store uses (not part of core WooCommerce)."
           ]
         }
       ],
-      "mcp_design_recommendation": "Expose a read-only 'get_order_status' / 'list_recent_orders' tool per backend (Shopify, WooCommerce) that returns normalized order fields (order id, customer contact info, status, tracking info, last-updated timestamp). Do NOT expose order create/update/cancel/delete endpoints through this MCP server — the agent's job is notification, not order management, so mutating endpoints are out of scope and a security/destructive-action risk. Prefer wiring backend webhooks (Shopify order/fulfillment webhooks) to push events into the agent's queue rather than having the MCP tool poll, to reduce latency and API usage."
+      "mcp_design_recommendation": "Expose read/derive tools, not order mutations. Suggested tools: `list_recent_order_events(since, statuses[])` (normalizes Shopify webhook topics and WooCommerce order.updated diffs into one internal event vocabulary: created, paid, fulfilled, partially_fulfilled, out_for_delivery, delivered, delayed, cancelled, refunded); `get_order(order_id)` returning a normalized order view (order number, customer name, contact email/phone, line items, status, shipping address, tracking numbers+carriers, customer-facing status URL); `get_order_notification_state(order_id)` returning which updates were already sent (dedupe ledger). Webhook registration should be an operator/deployment concern, not an agent tool — at most expose read-only `list_webhook_subscriptions` and `get_webhook_health` (useful for WooCommerce's auto-disable behaviour). Do NOT expose order write/cancel/refund/fulfil mutations, webhook delete, or raw GraphQL passthrough; and have `get_order` return only the contact fields needed for messaging so customer PII is not spread across the agent context."
     },
     {
-      "task_description": "Send transactional order-update notifications via email.",
+      "task_description": "Get normalized carrier tracking status updates for shipped orders (in transit, out for delivery, exception/delay, delivered).",
       "recommended_apis": [
         {
-          "api_name": "Twilio SendGrid",
+          "api_name": "EasyPost Tracking API",
           "rank": 1,
-          "rationale": "Mature, well-documented transactional email API with dynamic templating (ideal for standardized 'order shipped'/'order delivered' templates), scheduling, and categorization — widely used for exactly this order-update use case.",
+          "rationale": "Cheapest and simplest way to turn a tracking number into a normalized, push-updated status stream. The status/status_detail enums map almost directly onto customer-facing message types (out_for_delivery, delivery_exception, delayed, held, lost, return_to_sender, delivered), it includes est_delivery_date and a hosted public tracking URL you can put in the message, and there are canned test tracking codes for every state, which makes the agent easy to test end-to-end.",
           "docs_links": [
-            "https://www.twilio.com/docs/sendgrid/api-reference/mail-send/mail-send",
-            "https://www.twilio.com/docs/sendgrid/for-developers/tracking-events/twilio-sendgrid-event-webhook-overview"
+            "https://docs.easypost.com/docs/trackers",
+            "https://www.easypost.com/pricing"
           ],
-          "important_endpoints": "POST /v3/mail/send (single/templated send with personalizations, dynamic_template_data, send_at scheduling); Event Webhook for delivery/bounce/open/click/unsubscribe tracking.",
-          "potential_challenges": "Requires sender identity/domain verification before sending; free tier has volume caps and stricter deliverability scrutiny; EU data-residency sending requires a paid Pro-plan subuser; must implement webhook signature verification for trustworthy delivery tracking.",
+          "important_endpoints": "POST /v2/trackers {tracker: {tracking_code, carrier}} to start tracking a label bought elsewhere (carrier auto-detected if omitted, but passing it is recommended); GET /v2/trackers/:id and GET /v2/trackers to read; each Tracker exposes status, status_detail, est_delivery_date, tracking_details[] history with locations, carrier_detail (service, guaranteed_delivery_date, initial_delivery_attempt) and public_url. Updates arrive as webhook Events when webhooks are enabled. Auth: HTTP Basic with the API key as the username.",
+          "potential_challenges": "$0.01–$0.03 per tracked shipment (Advanced Tracking with branded pages/notifications is $0.03), so cost scales with order volume. Trackers are immutable — you cannot attach the order id later, so store your own tracker_id → order_id mapping (or use it at creation time). Tracking codes are not globally unique and duplicate create calls within 3 months return the original tracker, which can silently cross-wire two orders. Some carriers restrict third-party tracking and may require carrier-specific credentials.",
           "confidence": "documented",
           "open_questions": [
-            "What email sending volume is expected (affects plan/tier choice)?"
+            "Whether EasyPost webhook Events can be registered via API vs dashboard was not verified on this pass.",
+            "Whether the retention window of tracking_details is long enough for post-delivery support queries."
           ]
         },
         {
-          "api_name": "Postmark",
+          "api_name": "AfterShip Tracking API",
           "rank": 2,
-          "rationale": "Positioned specifically for transactional (not marketing) email with strong deliverability reputation management and separate 'MessageStream' concept that keeps transactional order emails isolated from bulk/marketing traffic — a good fit if the developer wants a lean, focused vendor.",
+          "rationale": "Richer post-purchase feature set for the same job: 1000+ courier coverage with slug detection, an AI estimated-delivery-date with a confidence code, on_time_status, and a webhook payload that already contains order_number and a branded tracking URL — which reduces how much joining the agent must do. It is a heavier, more product-shaped platform than EasyPost and its webhook configuration is dashboard-only.",
           "docs_links": [
-            "https://postmarkapp.com/developer/user-guide/send-email-with-api",
-            "https://postmarkapp.com/developer/api/email-api"
+            "https://www.aftership.com/docs/tracking/quickstart/api-quick-start"
           ],
-          "important_endpoints": "POST /email (single send with templates via TemplateAlias/TemplateModel), POST /email/batch (bulk send of individual personalized order updates).",
-          "potential_challenges": "Smaller ecosystem/fewer regions than SendGrid; still requires sender signature/domain verification; pricing is per-email and can be less flexible at very high volume compared to SendGrid's tiers (not independently verified — should be confirmed on pricing page before commit).",
-          "confidence": "documented",
-          "open_questions": [
-            "Has the developer verified Postmark's current pricing tiers against expected email volume?"
-          ]
-        }
-      ],
-      "mcp_design_recommendation": "Expose a single 'send_order_email' tool that accepts recipient, template name/id, and structured order-data variables, internally mapping to the provider's template-send call (SendGrid dynamic_template_data or Postmark TemplateModel). Do not expose raw arbitrary HTML/content sending or bulk marketing-list features — keep the tool narrowly scoped to templated transactional sends to avoid spam/abuse risk and preserve sender reputation. A separate 'get_email_status' tool backed by the provider's event webhook store can let the agent check delivery/bounce state before retrying via an alternate channel."
-    },
-    {
-      "task_description": "Send order-update notifications via SMS.",
-      "recommended_apis": [
-        {
-          "api_name": "Twilio Programmable Messaging",
-          "rank": 1,
-          "rationale": "Industry-standard SMS API, simple send call, strong global coverage, and status-callback webhooks for delivery tracking — a natural fit for short order-status texts.",
-          "docs_links": [
-            "https://www.twilio.com/docs/messaging/quickstart",
-            "https://www.twilio.com/docs/messaging/guides/track-outbound-message-status"
-          ],
-          "important_endpoints": "POST /2010-04-01/Accounts/{AccountSid}/Messages.json (create message: body, from, to, optional StatusCallback URL).",
-          "potential_challenges": "Requires purchasing/provisioning a phone number (or Messaging Service with number pool) and passing carrier registration (e.g., A2P 10DLC in the US) for application-to-person traffic — a real compliance/approval hurdle before production sending; trial accounts can only message verified numbers.",
-          "confidence": "documented",
-          "open_questions": [
-            "Does the target customer base require A2P 10DLC or other local carrier registration (varies by country)?"
-          ]
-        },
-        {
-          "api_name": "Vonage SMS / Messages API",
-          "rank": 2,
-          "rationale": "Comparable global SMS provider with a unified Messages API that can also address WhatsApp/Messenger/Viber through the same request shape (channel field), useful if the developer later wants to consolidate multi-channel sending under one vendor.",
-          "docs_links": [
-            "https://developer.vonage.com/en/api/sms",
-            "https://developer.vonage.com/en/api/messages"
-          ],
-          "important_endpoints": "POST https://rest.nexmo.com/sms/:format (legacy SMS API) or POST to Messages API with channel:'sms', webhook_url for delivery callback.",
-          "potential_challenges": "Two parallel APIs (legacy SMS API vs newer Messages API) can create confusion about which to use; same regulatory/number-provisioning burdens as Twilio for production A2P messaging; documentation is comparatively less detailed on this crawl than Twilio's.",
-          "confidence": "documented",
-          "open_questions": [
-            "Which Vonage API (legacy SMS vs Messages API) best fits long-term multi-channel plans?"
-          ]
-        }
-      ],
-      "mcp_design_recommendation": "Expose a 'send_order_sms' tool taking recipient phone number (E.164) and a short pre-approved message/template, with StatusCallback wired to a 'get_sms_status' tool. Do not expose two-way conversational SMS handling or number-provisioning/account-management endpoints — those are operational/admin concerns outside the notification agent's scope."
-    },
-    {
-      "task_description": "Send order-update notifications via WhatsApp/rich messaging (optional additional channel).",
-      "recommended_apis": [
-        {
-          "api_name": "WhatsApp Business Platform (Meta Cloud API)",
-          "rank": 1,
-          "rationale": "Direct, official API from Meta for WhatsApp messaging, supports rich message types (images, buttons, lists) well suited to order tracking/visual updates, and is free of a third-party BSP fee if self-managed.",
-          "docs_links": [
-            "https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/send-messages",
-            "https://developers.facebook.com/documentation/business-messaging/whatsapp/about-the-platform"
-          ],
-          "important_endpoints": "POST /<PHONE_NUMBER_ID>/messages for service (freeform) messages within a 24h customer-service window; template messages (Utility templates) required for proactive out-of-window order updates.",
-          "potential_challenges": "Requires Meta Business verification, phone number registration, and pre-approval of message templates used for proactive/out-of-session notifications (the common case for order updates) — an approval process that can take time and be rejected; customers must have opted in to WhatsApp messaging.",
-          "confidence": "documented",
-          "open_questions": [
-            "Has the business completed Meta Business verification and WhatsApp number registration?",
-            "Are order-update templates already drafted and approved, or does that approval need to be budgeted into the project timeline?"
-          ]
-        },
-        {
-          "api_name": "Twilio WhatsApp API (via Programmable Messaging)",
-          "rank": 2,
-          "rationale": "Lets a team reuse the same Twilio account/credentials and SDK used for SMS to also send WhatsApp messages (just prefixing numbers with 'whatsapp:'), simplifying a multi-channel MCP tool design at the cost of an added BSP layer.",
-          "docs_links": [
-            "https://www.twilio.com/docs/whatsapp/api",
-            "https://www.twilio.com/docs/content/create-and-send-your-first-content-api-template"
-          ],
-          "important_endpoints": "client.messages.create with from/to prefixed 'whatsapp:+E164'; Content API (contentSid + contentVariables) for sending pre-approved templates outside the 24h session.",
-          "potential_challenges": "Still subject to the exact same Meta template-approval and 24-hour session rules as the native Cloud API, plus Twilio's own per-message fees on top of Meta's; onboarding requires WhatsApp Sender registration through Twilio console.",
-          "confidence": "documented",
-          "open_questions": [
-            "Is the added cost/complexity of a BSP (Twilio) justified versus using Meta's Cloud API directly, given the team already needs Twilio for SMS?"
-          ]
-        }
-      ],
-      "mcp_design_recommendation": "If WhatsApp is required, expose a 'send_order_whatsapp_template' tool restricted to pre-approved template sends (never freeform arbitrary text) so the MCP server can't accidentally violate the 24-hour session rule or WhatsApp's policy on unsolicited messaging. Treat this as an optional channel added only after the developer confirms Meta Business verification and template approval are in place."
-    },
-    {
-      "task_description": "Track delivery status, handle bounces/opt-outs/failures across channels.",
-      "recommended_apis": [
-        {
-          "api_name": "Twilio Messaging Status Callbacks",
-          "rank": 1,
-          "rationale": "Native, well-documented mechanism to receive per-message delivery status (queued/sent/delivered/failed/undelivered/read) for both SMS and Twilio-routed WhatsApp messages, enabling retry logic or fallback to another channel.",
-          "docs_links": [
-            "https://www.twilio.com/docs/messaging/guides/track-outbound-message-status",
-            "https://www.twilio.com/docs/messaging/guides/outbound-message-status-in-status-callbacks"
-          ],
-          "important_endpoints": "StatusCallback webhook (configured per-message or per-Messaging Service) POSTs MessageStatus + ErrorCode to the developer's endpoint.",
-          "potential_challenges": "High-volume senders can receive a 'callback storm' (multiple POSTs per message); webhook endpoint must be publicly reachable and should validate Twilio's request signature to avoid spoofed status updates.",
-          "confidence": "documented",
-          "open_questions": []
-        },
-        {
-          "api_name": "SendGrid Event Webhook",
-          "rank": 2,
-          "rationale": "Equivalent mechanism for the email channel: delivers delivered/bounce/blocked/spamreport/unsubscribe events so the agent can mark an email as failed, suppress future sends to bounced/opted-out addresses, or trigger a fallback SMS.",
-          "docs_links": [
-            "https://www.twilio.com/docs/sendgrid/for-developers/tracking-events/twilio-sendgrid-event-webhook-overview",
-            "https://www.twilio.com/docs/sendgrid/api-reference/webhooks"
-          ],
-          "important_endpoints": "Event Webhook POST of a JSON array of event objects (email, event, timestamp, sg_message_id, reason) to a configured URL; ECDSA signature verification available.",
-          "potential_challenges": "Must build persistent storage/suppression list logic yourself (SendGrid also maintains its own internal suppression lists for bounces/spam reports, which can silently block later sends unless separately managed via SendGrid's Suppression Management API — not fully explored here).",
+          "important_endpoints": "POST /tracking/{version}/trackings {tracking_number, slug|slug_group, order_number, custom_fields} on base https://api.aftership.com with an `as-api-key` header; GET/PUT/DELETE /trackings/{id}; POST retrack and mark-as-completed; POST detect courier; GET couriers (to learn per-courier mandatory fields); Estimated Delivery Date prediction (single + batch). Inbound: `tracking_update` webhook with tag/subtag, checkpoints[], aftership_estimated_delivery_date, courier_tracking_link, verified by the aftership-hmac-sha256 header.",
+          "potential_challenges": "Webhook URLs and the webhook secret are configured in the AfterShip admin portal rather than via API, so provisioning is manual and cannot be automated by the agent. Date-versioned API (e.g. 2026-07) means you must pin and periodically migrate versions. Courier auto-detection depends on the account's Preferred Courier List being configured, and some couriers require extra mandatory fields or creation fails. Pricing was not inspected — AfterShip is quota/shipment based and materially more expensive than raw EasyPost tracking at low volume.",
           "confidence": "partially_documented",
           "open_questions": [
-            "Should the MCP server also integrate SendGrid's Suppression Management API to programmatically clear/check suppressed addresses?",
-            "How should cross-channel fallback logic (e.g., email bounced -> try SMS) be orchestrated — in the agent's own logic or a dedicated MCP tool?"
+            "AfterShip pricing tiers and included shipment quotas were not fetched — verify cost per tracked shipment before committing.",
+            "Rate limits (there is a dedicated Rate Limit doc page) were not inspected."
           ]
         }
       ],
-      "mcp_design_recommendation": "Expose a single unified 'get_notification_status(message_id)' tool backed by a small internal datastore that ingests both Twilio status callbacks and SendGrid Event Webhook payloads (verifying signatures on ingestion, not as an MCP tool call) and normalizes them to a common status enum (queued/sent/delivered/failed/bounced/opted_out). The MCP server should expose only read access to this status store to the agent, plus a narrowly-scoped 'suppress_customer(channel, contact)' tool for honoring opt-outs — it should never expose raw webhook-ingestion or provider account-management endpoints directly as agent-callable tools, since those are infrastructure concerns, not agent actions."
+      "mcp_design_recommendation": "Two tools: `start_tracking(order_id, tracking_number, carrier?)` (idempotent — must look up an existing tracker for the same code+carrier before creating one, because both providers dedupe silently) and `get_tracking_status(order_id|tracking_number)` returning a provider-agnostic shape {state, state_detail, eta, last_scan{time,location,message}, public_tracking_url, is_exception}. Normalize EasyPost's status/status_detail and AfterShip's tag/subtag into one internal enum so the message templates never branch on vendor vocabulary. Tracking-provider webhooks should be ingested by the server and surfaced as events, not exposed as an agent-callable tool. Do NOT expose tracker delete, 'retrack', or mark-as-completed (state-mutating and billable), and do not expose label-buying/insurance endpoints from the same EasyPost key — scope the key to tracking only."
+    },
+    {
+      "task_description": "Send the order update to the customer over email.",
+      "recommended_apis": [
+        {
+          "api_name": "Postmark (Email + Templates API)",
+          "rank": 1,
+          "rationale": "Purpose-built for transactional mail, which is exactly what order updates are: one call sends a stored template with a data model, Metadata lets you stamp the order id onto the message for later reconciliation, and Message Streams enforce separation between transactional and marketing traffic (important for deliverability and for not letting an agent accidentally send bulk mail on the transactional stream). Batch endpoint covers backfills.",
+          "docs_links": [
+            "https://postmarkapp.com/developer/api/templates-api",
+            "https://postmarkapp.com/pricing"
+          ],
+          "important_endpoints": "POST https://api.postmarkapp.com/email/withTemplate with {TemplateAlias|TemplateId, TemplateModel, From, To, Tag, Metadata, TrackOpens, TrackLinks, MessageStream}; POST /email/batchWithTemplates for up to 500 messages per call; auth via the X-Postmark-Server-Token header. Plain POST /email exists for non-templated sends.",
+          "potential_challenges": "Pricing has a hard cliff: free tier is 100 emails/month with no overages, and the next tier starts at 10,000 emails/month ($15–$18/mo, overage $1.20–$1.80 per 1,000) — nothing in between. The From address must be a confirmed Sender Signature (domain DKIM/SPF setup required before production). Default activity/content retention is 45 days (longer retention is a paid add-on), so long-term audit of what was sent must live in your own datastore. Max 100 templates per server.",
+          "confidence": "documented",
+          "open_questions": [
+            "Per-second/per-minute API rate limits were not confirmed on the pages inspected.",
+            "Whether the merchant already has a domain authenticated with another ESP (would change the migration cost)."
+          ]
+        },
+        {
+          "api_name": "Twilio SendGrid Mail Send v3",
+          "rank": 2,
+          "rationale": "A strong alternative, especially if SMS is also going through Twilio (one vendor, one billing relationship). Its personalizations array (up to 1000 recipients per request) and Handlebars dynamic templates handle both single order updates and bulk catch-up sends, and custom_args carry the order id into event data. Slightly more complex payload shape and a broader marketing surface than the workflow needs.",
+          "docs_links": [
+            "https://www.twilio.com/docs/sendgrid/api-reference/mail-send/mail-send"
+          ],
+          "important_endpoints": "POST https://api.sendgrid.com/v3/mail/send (EU subusers: https://api.eu.sendgrid.com) with Authorization: Bearer <API key>; body has personalizations[] (to/cc/bcc, subject, dynamic_template_data, custom_args, send_at), from, reply_to, content[], attachments[], template_id ('d-' prefixed for dynamic templates), categories (max 10), batch_id, send_at (max 72h ahead).",
+          "potential_challenges": "From address must be a verified sender / authenticated domain. EU regional sending requires a Pro plan or above plus an EU IP and EU subuser — a real constraint if customer data must stay in the EU. Scheduling is capped at 72 hours ahead. The same API key can reach marketing features, so scope API key permissions tightly. Deliverability on shared IPs is more variable than Postmark's transactional-only reputation (vendor-comparison claim, not independently verified).",
+          "confidence": "documented",
+          "open_questions": [
+            "Current SendGrid pricing tiers/free-tier volume were not fetched.",
+            "Whether an order-update sender should use a dedicated IP at the merchant's volume."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose a single high-level tool `send_order_email(order_id, update_type, channel_overrides?)` rather than a generic `send_email(to, subject, html)`. The MCP server should resolve the recipient address itself from the order record (never accept a free-text `to` from the model), pick the template alias from `update_type`, build the merge model from normalized order + tracking data, stamp Metadata/custom_args with {order_id, update_type, idempotency_key}, and refuse to send if the ledger already recorded that (order_id, update_type). Also expose read-only `list_email_templates()` so the agent can discover which update types are supported. Do NOT expose template create/edit/delete, suppression deletion (un-suppressing a bounced or complained recipient is a compliance risk), attachment upload, batch sends to arbitrary recipient lists, or the marketing/broadcast stream."
+    },
+    {
+      "task_description": "Send the order update over SMS and/or WhatsApp (and note push as an unresolved channel).",
+      "recommended_apis": [
+        {
+          "api_name": "Twilio Programmable Messaging (+ WhatsApp Content Templates)",
+          "rank": 1,
+          "rationale": "One Message resource covers SMS, MMS and WhatsApp (channel address form whatsapp:+1555...), so the agent has a single send path with a single status vocabulary across channels, and Messaging Services add scheduling and link shortening (useful for tracking URLs in a 160-char SMS). Content Templates are omnichannel, so the same approved template can be reused across WhatsApp and SMS.",
+          "docs_links": [
+            "https://www.twilio.com/docs/messaging/api/message-resource",
+            "https://www.twilio.com/docs/whatsapp/tutorial/send-whatsapp-notification-messages-templates",
+            "https://www.twilio.com/docs/messaging/compliance/a2p-10dlc"
+          ],
+          "important_endpoints": "Create a Message (POST to the Messages resource) with To/From (E.164, alphanumeric sender, short code, or whatsapp: channel address) or MessagingServiceSid, plus Body — or ContentSid (HX...) + ContentVariables for approved templates; Fetch/Read Messages for status, error_code, price; Update Message to redact body/To; Media and MessageFeedback sub-resources. Outbound status values: accepted, scheduled, queued, sending, sent, delivered, undelivered, failed, canceled, and read (WhatsApp/RCS).",
+          "potential_challenges": "Heavy onboarding before the first production message: US SMS from a 10DLC number requires A2P Brand + Campaign registration (Tax ID for Standard brands, opt-in/opt-out/HELP language, daily caps by brand type/Trust Score, extra carrier fees and filtering if unregistered); WhatsApp needs a WhatsApp Business Account and Meta-approved templates that cannot be edited after submission, can only be sent outside the 24-hour customer service window as templates, may be paused (3h/6h) or deactivated on negative feedback, and deleted template names are blocked for 30 days. Message bodies are PII (30-day retention marker) and per-message cost is real, so retries must be bounded.",
+          "confidence": "documented",
+          "open_questions": [
+            "Which channels the merchant actually wants (email only vs +SMS vs +WhatsApp) — the clarifying question could not be answered.",
+            "Where the customer's SMS/WhatsApp consent is stored; neither Shopify nor WooCommerce consent state was researched.",
+            "Per-country SMS pricing and whether an alphanumeric sender ID is usable in the merchant's markets."
+          ]
+        },
+        {
+          "api_name": "Vonage Messages API",
+          "rank": 2,
+          "rationale": "Credible single-API alternative covering SMS, MMS, RCS, WhatsApp, Messenger, Viber and Email, with documented cross-channel failover (e.g. try WhatsApp, fall back to SMS) — attractive for order updates where reachability matters more than channel. It also ships a WhatsApp Template Management API (template lifecycle via API rather than console) and a 10DLC API for US registration.",
+          "docs_links": [
+            "https://developer.vonage.com/en/messages/overview"
+          ],
+          "important_endpoints": "Messages API send endpoint (per-channel message bodies) authenticated with JWT signed by an application private key; companion references: WhatsApp Template Management API, External Accounts API, 10DLC API, Channel Manager. A hosted sandbox exists for WhatsApp/Viber testing before production senders are approved.",
+          "potential_challenges": "JWT-per-request auth (application ID + private key) is more setup than a static API key. The same US A2P 10DLC and Meta WhatsApp template-approval requirements apply — the provider does not remove them. Only the overview page was inspected: exact request/response schemas, delivery-receipt webhook payloads and pricing were not verified, so treat implementation details as unconfirmed.",
+          "confidence": "partially_documented",
+          "open_questions": [
+            "Exact send payload and delivery-receipt (DLR) webhook schema per channel not verified.",
+            "Vonage pricing for SMS/WhatsApp in the merchant's target countries not checked.",
+            "Whether Vonage's channel failover is billable per attempted channel."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose `send_order_sms(order_id, update_type)` and `send_order_whatsapp(order_id, update_type)` — or better, one `notify_customer(order_id, update_type, channels[])` that the server fans out — with the recipient number resolved server-side from the order and a mandatory consent check (skip and report 'no_consent' rather than sending). For WhatsApp the tool must accept only a known template key mapped to an approved ContentSid plus a variables map; never let the model compose free-form WhatsApp body text for business-initiated messages. Enforce an idempotency ledger, a per-order rate cap (e.g. max N updates/day), and quiet-hours handling. Do NOT expose: template submission/deletion, A2P brand/campaign registration, phone-number purchase, message redaction/delete, or arbitrary `to` numbers. Push notifications (APNs/FCM/OneSignal) were not researched — treat as an open channel that would need its own tool and device-token store."
+    },
+    {
+      "task_description": "Render/manage message templates and track delivery outcomes (opens, bounces, complaints, delivery receipts) so the agent knows whether the customer was actually reached.",
+      "recommended_apis": [
+        {
+          "api_name": "Postmark (Templates, Webhooks, Messages, Suppressions APIs)",
+          "rank": 1,
+          "rationale": "Gives the most complete closed loop for email: server-side templates with a validate endpoint (so template changes can be CI-checked), event webhooks for delivery/bounce/open/click/spam-complaint/subscription-change, a Messages API for searching outbound messages and per-message opens/clicks, and automatic suppression management so a bounced customer isn't hammered by every subsequent order update.",
+          "docs_links": [
+            "https://postmarkapp.com/developer/api/templates-api",
+            "https://postmarkapp.com/pricing"
+          ],
+          "important_endpoints": "Templates: create/edit/get/list/delete/validate, push templates between servers (limit 100 per server). Webhooks API: list/create/edit/delete webhooks for Delivery, Bounce, Open, Click, SpamComplaint, SubscriptionChange. Messages API: outbound message search, message details/dump, message opens, opens for a single message, clicks. Suppressions API: dump/create/delete suppressions. Stats API for aggregate bounce/open/click counts.",
+          "potential_challenges": "Message content/activity retention defaults to 45 days (custom retention is a paid add-on on Pro+), so the agent's own audit trail must be persisted locally. 100-template-per-server cap limits a 'template per update type per locale' explosion. Open tracking is unreliable by nature (image blocking) and should not be treated as proof of delivery. Webhook endpoints must be secured (Postmark documents protecting the endpoint) and events can arrive out of order.",
+          "confidence": "documented",
+          "open_questions": [
+            "Whether Postmark webhook signing (vs basic-auth-protected URL) is available was not verified.",
+            "Retention add-on pricing beyond 'starts at $5/month' not itemized per volume."
+          ]
+        },
+        {
+          "api_name": "Twilio SendGrid (Dynamic Templates + Event Webhook) and Twilio Messaging status",
+          "rank": 2,
+          "rationale": "If both channels run on Twilio, one vendor covers both loops: SendGrid dynamic templates (Handlebars) with categories/custom_args carried into activity data for email, and Message resource status/error_code (plus status callbacks) for SMS/WhatsApp delivery receipts including WhatsApp 'read'. Slightly less coherent than Postmark for email-only setups, and the SMS and email event models are separate.",
+          "docs_links": [
+            "https://www.twilio.com/docs/sendgrid/api-reference/mail-send/mail-send",
+            "https://www.twilio.com/docs/messaging/api/message-resource"
+          ],
+          "important_endpoints": "Email: template_id ('d-' dynamic) + dynamic_template_data on POST /v3/mail/send; categories and custom_args flow into activity/event data. SMS/WhatsApp: Fetch a Message / Read multiple Messages for status, error_code, error_message, price; Update Message to redact body/To.",
+          "potential_challenges": "Two different event pipelines and two different status vocabularies to normalize. The SendGrid Event Webhook and the Twilio StatusCallback mechanism were not inspected in this pass, so their payloads and signature verification are unverified. Reading message status by polling costs API calls and is race-prone; callbacks are the correct pattern. Twilio message bodies carry PII retention implications.",
+          "confidence": "partially_documented",
+          "open_questions": [
+            "SendGrid Event Webhook payload/signature verification not verified.",
+            "Twilio StatusCallback parameter list not verified (the docs URL tried returned 404) — confirm before relying on it.",
+            "Whether SendGrid template versions can be managed via API in the plan the merchant would buy."
+          ]
+        },
+        {
+          "api_name": "Klaviyo Events API (delegate templating + sending)",
+          "rank": 3,
+          "rationale": "A different architecture worth considering: instead of the agent rendering and sending messages, it posts normalized 'Order Shipped'/'Order Delayed' events with a profile, and Klaviyo flows own the templates, channel choice, consent and reporting. This minimizes the agent's messaging surface and reuses the merchant's existing marketing stack, at the cost of losing per-message control and adding a heavier dependency.",
+          "docs_links": [
+            "https://developers.klaviyo.com/en/reference/create_event"
+          ],
+          "important_endpoints": "POST https://a.klaviyo.com/api/events with JSON:API body {data:{type:'event', attributes:{metric, profile, properties, backfill}}}, Authorization header, accept/content-type application/vnd.api+json, and a mandatory dated `revision` header (e.g. 2026-07-15).",
+          "potential_challenges": "Only the event-creation reference was inspected; the rest of the loop (flow triggering, template management, delivery/bounce reporting endpoints, SMS consent handling, pricing by active profiles) is unverified. Dated `revision` header means scheduled version migrations, and several older revisions are already marked deprecated. Delivery is asynchronous and indirect: the agent cannot easily assert 'this customer was notified' from the API response alone.",
+          "confidence": "partially_documented",
+          "open_questions": [
+            "How to read per-message delivery/bounce outcomes back from Klaviyo was not researched.",
+            "Klaviyo pricing model and whether transactional order updates are permitted alongside marketing consent rules.",
+            "Whether flow-based delivery gives sufficient timing determinism for 'out for delivery' style updates."
+          ]
+        }
+      ],
+      "mcp_design_recommendation": "Expose `list_templates()` (read-only, so the agent can only choose from vetted update types), `render_preview(update_type, order_id)` (renders without sending — the safe way to let a human or the agent verify copy), and `get_delivery_outcome(order_id, update_type)` returning a normalized {state: queued|sent|delivered|opened|bounced|complained|undelivered, provider_message_id, error}. The MCP server should ingest provider webhooks (Postmark delivery/bounce/spam-complaint, SendGrid events, Twilio status callbacks) into its own ledger and answer from that ledger, rather than proxying provider event APIs. Do NOT expose template create/edit/delete, suppression deletion, message redaction/deletion, or raw stats dumps of other customers' messages; and never expose an 'un-suppress and resend' capability — repeated sending to a hard-bounced or complaining recipient is the fastest way to lose sending reputation."
     }
   ],
-  "cross_task_notes": "All communication-channel APIs (SendGrid, Postmark, Twilio SMS/WhatsApp, Vonage) share the pattern: authenticate with a static API key/token, POST a JSON payload describing recipient + template/content, and optionally receive asynchronous webhook callbacks for delivery status. This suggests a clean MCP layering: (1) one or more 'get_order_status' tools per backend (Shopify/WooCommerce) that the agent calls to decide what update to send, (2) one 'send_notification' tool per channel (email/SMS/WhatsApp) that accepts a normalized {recipient, template, variables} shape, and (3) a shared, channel-agnostic 'get_delivery_status' tool backed by a webhook-fed datastore. Because every outbound-messaging API in this space requires either OAuth app approval (Shopify), carrier/BSP registration (Twilio/Vonage SMS, WhatsApp templates), or sender/domain verification (SendGrid/Postmark), the report should flag to the developer that a nontrivial account-setup/compliance phase precedes any code — this is true across every task, not just one. No task in this workflow legitimately needs order-mutating endpoints (create/cancel/refund) — the MCP server should be strictly read-plus-notify to minimize blast radius, since a compromised or misconfigured agent should never be able to alter orders or send unlimited/unthrottled messages. Rate limiting and per-customer message-frequency caps (to avoid spamming, protecting sender/WhatsApp quality reputation) should be enforced in the MCP tool layer itself, not left to the agent's judgment."
+  "cross_task_notes": "Recommended overall MCP server layout: one server with four internal adapters (commerce, tracking, email, messaging) and a small state store of its own. Suggested tool surface: list_recent_order_events, get_order, start_tracking, get_tracking_status, list_templates, render_preview, notify_customer(order_id, update_type, channels[]), get_delivery_outcome, get_order_notification_state. The natural composition is: order/fulfillment webhook → get_order → start_tracking (on first fulfillment) → tracking webhook → get_tracking_status → notify_customer → get_delivery_outcome, with every step keyed by (order_id, update_type) in an idempotency ledger.\\n\\nCross-cutting realities that dominate this workflow more than API choice does:\\n1) Duplicate suppression. Shopify orders/updated and WooCommerce order.updated both fire on many unrelated changes, and webhooks can be redelivered; the ledger, not the model's judgment, must decide whether a message was already sent.\\n2) Consent and compliance. Email needs an authenticated sending domain and honoured suppressions; US SMS needs A2P 10DLC brand+campaign registration with opt-in/opt-out/HELP language; WhatsApp needs a WABA and Meta-approved templates and only allows free-form text inside a 24-hour customer service window. None of these can be automated away by the agent, and the MCP server should hard-fail rather than send when consent or template approval is missing.\\n3) Cost per action. Tracking is ~$0.01–$0.03 per shipment, SMS/WhatsApp are per-message, email is per-1,000. Every send tool should be treated as an expensive, non-idempotent side effect: bounded retries, per-order caps, no agent-initiated bulk sends.\\n4) Auth spread. Shopify OAuth access token + scopes, WooCommerce consumer key/secret over Basic, EasyPost Basic-with-API-key, AfterShip as-api-key, Postmark X-Postmark-Server-Token, SendGrid bearer key, Twilio account SID/auth token, Vonage JWT, Klaviyo key + dated revision header. Keep each credential in the server (never in tool arguments) and scope keys narrowly (e.g. an EasyPost key limited to tracking, a SendGrid key without marketing scopes).\\n5) PII minimization. Order payloads contain protected customer data (Shopify explicitly gates it) and message bodies are PII at Twilio. Tools should return only the fields needed to compose the message, and the agent should never receive full customer lists.\\n6) Unresolved decisions the developer must make (the clarifying question went unanswered in this non-interactive run): actual commerce platform, channel mix (email only vs +SMS vs +WhatsApp vs push), region/data-residency (affects SendGrid EU plan and GDPR posture), volume (affects Postmark's 100→10,000 pricing cliff and 10DLC brand tier), and whether Shopify/WooCommerce built-in customer emails will be disabled to avoid double-notifying customers. Push notifications were not researched at all and remain an open gap.\""
 }
