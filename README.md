@@ -69,6 +69,7 @@ final report:
 | `github-slack-digest.*` | event polling + LLM step + messaging | Sonnet 5 | Ranked "agent-native summarization (no API)" above external LLM APIs; compared polling vs. webhooks |
 | `trip-planner.*` | flights + weather + visa | Opus 5 | Independently added a 4th task (city-name → IATA/geo identifier resolution) that the query never mentioned |
 | `order-updates.*` | deliberately ambiguous one-liner | Opus 5 | Paused to ask a clarifying question **with proposed answer options** (rendered as an arrow-key picker in interactive runs); run was non-interactive, so it proceeded on stated assumptions, added carrier-tracking and deliverability tasks on its own, and recorded the ambiguity as open questions |
+| `brand-mentions.*` | social monitoring + **write actions** (auto-replies) | Opus 5 | A stale-information stress test: the web is full of outdated "Twitter API is free" content, but the agent skipped snippet-beliefs entirely (4 searches vs. 23 doc pages read) and reported current paid tiers with exact prices, ToS/compliance risks of scraped-data vendors, and an upcoming 2026 API policy change |
 
 Reproduce with, e.g.:
 
