@@ -44,6 +44,20 @@ Outputs:
   every model turn, tool call, tool result, and a scratchpad snapshot after
   each iteration. This is the full record of the agent's evolving conclusions.
 
+## Verify a report (independent fact-check)
+
+```sh
+npm run verify -- examples/restaurant-menus.report.json   # or no arg = newest in reports/
+```
+
+The verifier is a second, fresh-context model pass that never sees the
+researcher's conversation. It **re-fetches the documentation pages the report
+cites** and adversarially checks the concrete claims (endpoints, auth,
+pricing, rate limits) against them — claims the docs don't confirm are marked
+`not_found`, incompatible ones `contradicted`, and each API entry gets a
+verdict. Results are saved next to the report as `*.verification.json`.
+A committed example: `examples/restaurant-menus.verification.json`.
+
 ## Example runs (committed under `examples/`)
 
 Three substantially different queries, each with its full execution trace and
@@ -141,5 +155,5 @@ gets a nudge back into the loop; a safety refusal aborts with a clear message.
 
 - Prune stale page-fetch results from the transcript once distilled into findings.
 - A link-frontier tool ("list links on this docs page") for deeper doc navigation.
-- Verification pass: a second fresh-context model call that spot-checks report claims against the trace.
+- Feed verification results back into the research loop (auto-repair: contradicted claims trigger re-research instead of just being flagged).
 - An eval harness comparing reports across runs for stability.

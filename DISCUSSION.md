@@ -99,6 +99,17 @@ Three layers keep the report honest:
    `assumed`) and an `open_questions` list. Uncertainty is surfaced in the
    output contract itself, so an unverified claim can't silently look like a
    verified one.
+4. **After the fact** — an independent verification pass (`npm run verify`,
+   `src/verify.ts`). A fresh-context model that never saw the researcher's
+   conversation re-fetches the documentation pages the report cites and
+   adversarially checks each concrete claim (endpoints, auth, pricing, rate
+   limits) against them, with the fetched pages as the *only* admissible
+   evidence. Claims the report already labels as assumptions are skipped —
+   honest flags aren't errors. Output is a per-API verdict
+   (`supported` / `partially_supported` / `unsupported` /
+   `could_not_verify`) with per-claim statuses, saved as
+   `*.verification.json`. Because evidence is re-fetched live, this pass
+   also catches documentation drift after the research ran.
 
 ## 5. Structured output
 
@@ -153,8 +164,9 @@ snapshots alone — including the moment a finding gets superseded.
   JS-rendered scraping. The dependency is isolated in `tools.ts` behind two
   small functions, so swapping backends is a local change.
 - **Simple coverage heuristic.** ≥2 candidates + ≥1 documented fact per task
-  is crude but effective; a smarter critic (e.g. a fresh-context verification
-  pass over the final report) is the first quality upgrade I'd add.
+  is crude but effective. The fresh-context verification pass (§4, layer 4)
+  now provides the smarter critic post-hoc; the next step would be feeding
+  its contradicted claims back into the loop for automatic re-research.
 - **Truncated page fetches (18K chars).** Keeps any single observation from
   flooding context; the truncation note tells the model to fetch a more
   specific sub-page, which mirrors how a human reads docs anyway.

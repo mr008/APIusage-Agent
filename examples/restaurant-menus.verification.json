@@ -1,0 +1,1015 @@
+{
+  "verified_report": "examples/restaurant-menus.report.json",
+  "model": "claude-opus-5",
+  "results": [
+    {
+      "task_description": "Resolve the user's area input (city name, neighbourhood, postcode, free text) into coordinates and/or a bounding box or polygon that downstream POI search can consume.",
+      "api_name": "Nominatim (OpenStreetMap)",
+      "rank": 1,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Endpoint is GET https://nominatim.openstreetmap.org/search",
+          "status": "supported",
+          "note": "The Search docs state the API format is `https://nominatim.openstreetmap.org/search?<params>`."
+        },
+        {
+          "claim": "Accepts either q= free-form query or structured params including city, state, country, postalcode",
+          "status": "supported",
+          "note": "Docs list a free-form `q` parameter and a structured form with amenity, street, city, county, state, country, postalcode."
+        },
+        {
+          "claim": "format supports jsonv2 and geojson",
+          "status": "supported",
+          "note": "format accepts one of xml, json, jsonv2, geojson, geocodejson, with jsonv2 the default."
+        },
+        {
+          "claim": "addressdetails=1 returns an address breakdown",
+          "status": "supported",
+          "note": "Docs: 'When set to 1, include a breakdown of the address into elements.'"
+        },
+        {
+          "claim": "polygon_geojson=1 returns the area polygon",
+          "status": "supported",
+          "note": "Polygon output section documents polygon_geojson (0 or 1) adding the full geometry of the place as GeoJSON."
+        },
+        {
+          "claim": "countrycodes= acts as a hard country filter",
+          "status": "supported",
+          "note": "Docs explicitly call countrycodes a 'hard filter' that should be preferred over the fuzzy structured 'country' parameter."
+        },
+        {
+          "claim": "limit can be up to 40",
+          "status": "supported",
+          "note": "Docs: limit 'Cannot be more than 40' (default 10)."
+        },
+        {
+          "claim": "Each result carries lat, lon and a boundingbox array",
+          "status": "not_found",
+          "note": "The Search page's parameter documentation and truncated example do not show result fields; the Place Output Formats page was not fetched."
+        },
+        {
+          "claim": "Free and no API key required",
+          "status": "not_found",
+          "note": "Neither the Search docs nor the usage policy mentions pricing or the absence of an API key (only an optional `email` parameter for large request volumes)."
+        },
+        {
+          "claim": "Public instance has a hard cap of 1 request/second",
+          "status": "supported",
+          "note": "Usage policy: 'No heavy uses (an absolute maximum of 1 request per second).'"
+        },
+        {
+          "claim": "Mandatory identifying User-Agent/Referer",
+          "status": "supported",
+          "note": "Policy requires a valid HTTP Referer or User-Agent identifying the application; stock library User-Agents are not acceptable."
+        },
+        {
+          "claim": "Mandatory ODbL attribution",
+          "status": "supported",
+          "note": "Policy requires clearly displaying attribution and notes data is provided under the ODbL share-alike licence."
+        },
+        {
+          "claim": "Mandatory client-side caching",
+          "status": "supported",
+          "note": "Policy states results 'must be cached' on your side for bulk tasks and urges caching/proxying for apps, though the strict 'must' is stated in the bulk-geocoding section."
+        },
+        {
+          "claim": "Long-running or periodic scripts capped at 4 requests/minute, single thread, single machine",
+          "status": "supported",
+          "note": "Bulk Geocoding rules: single thread, 1 machine only, and scripts running longer than a day or at regular intervals restricted to 4 requests per minute."
+        },
+        {
+          "claim": "'Systematic queries' and 'downloading all POIs in an area' are explicitly forbidden and grounds for a ban",
+          "status": "supported",
+          "note": "Unacceptable Use lists 'Systematic queries ... and downloading all POIs in an area' among uses that are 'strictly forbidden and will get you banned'."
+        },
+        {
+          "claim": "Reselling geocoding results is prohibited",
+          "status": "supported",
+          "note": "Unacceptable Use includes 'Reselling of geocoding results'; geocoding-primary services must run their own instance."
+        },
+        {
+          "claim": "Commercial use is told to self-host or use a commercial provider",
+          "status": "supported",
+          "note": "Policy warns commercial applications about access withdrawal and points to third-party providers or installing your own instance."
+        }
+      ],
+      "summary": "Nearly all checkable claims about the /search endpoint parameters (q, structured fields, format, addressdetails, polygon_geojson, countrycodes, limit≤40) and the public instance's usage policy (1 req/s, User-Agent/Referer, ODbL attribution, caching, 4 req/min for long-running scripts, forbidden systematic queries and reselling) are directly confirmed by the fetched pages. Two smaller claims are unverified here: that results include lat, lon and a boundingbox array (the Output Formats page was not fetched) and that the service is 'free and no key', which neither fetched page states. No claim is contradicted."
+    },
+    {
+      "task_description": "Resolve the user's area input (city name, neighbourhood, postcode, free text) into coordinates and/or a bounding box or polygon that downstream POI search can consume.",
+      "api_name": "Google Geocoding API",
+      "rank": 2,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "The Geocoding request endpoint is GET https://maps.googleapis.com/maps/api/geocode/json?address=<area>&key=KEY",
+          "status": "supported",
+          "note": "The page states requests take the form https://maps.googleapis.com/maps/api/geocode/outputFormat?parameters with json recommended, HTTPS required, and lists key and address as required parameters."
+        },
+        {
+          "claim": "Response returns results[].geometry.location (lat/lng) and geometry.viewport.northeast/southwest usable as a bounding box, plus place_id and address_components",
+          "status": "not_found",
+          "note": "The fetched page is truncated before the Results section; no response field names such as geometry.viewport.northeast/southwest, geometry.location or address_components appear in the admissible text (only 'place_id' appears, on the Places policies page)."
+        },
+        {
+          "claim": "components= is a hard restriction on results",
+          "status": "supported",
+          "note": "The page says each component:value pair 'fully restricts the results from the geocoder'."
+        },
+        {
+          "claim": "bounds= and region= are biasing (not restricting) parameters, and language= is available",
+          "status": "supported",
+          "note": "The page states bounds and region 'will only influence, not fully restrict, results from the geocoder', and documents the optional language parameter."
+        },
+        {
+          "claim": "Requires a billed Google Cloud project",
+          "status": "not_found",
+          "note": "The fetched pages only state that an API key is required 'for purposes of quota management'; no billing/billed-project requirement is stated in the admissible text."
+        },
+        {
+          "claim": "Docs explicitly warn the address parameter is not for business names or categories combined with a location, e.g. 'Tesco near Dallas, Texas'",
+          "status": "supported",
+          "note": "The unsupported-query table lists 'Names of businesses, chains, or categories combined with locations where these entities are not available' with the example \"Tesco near Dallas, Texas\"."
+        },
+        {
+          "claim": "Geocoding API v4 is now generally available, so the documented v3 endpoint implies a future migration",
+          "status": "supported",
+          "note": "The page banner states 'Version 4 of the Geocoding API is generally available' and links a v3-to-v4 migration guide; the page itself is under 'Developer Guides v3'."
+        },
+        {
+          "claim": "Google Maps Platform content is subject to caching/storage restrictions and attribution requirements",
+          "status": "supported",
+          "note": "The Places policies page describes caching restrictions (with place ID exempt) and detailed Google Maps attribution requirements."
+        },
+        {
+          "claim": "place_id chains directly into Place Details",
+          "status": "not_found",
+          "note": "The fetched pages mention place_id as a returned, cache-exempt identifier but do not document using it to call Place Details."
+        },
+        {
+          "claim": "Google Geocoding returns no true area polygon, only a rectangular viewport",
+          "status": "not_found",
+          "note": "The truncated Geocoding page shown contains no response-geometry description, so neither the presence of a viewport nor the absence of polygons is confirmed here."
+        }
+      ],
+      "summary": "The request-side claims (endpoint form, required key/address, components as hard restriction, bounds/region biasing, language, the 'Tesco near Dallas, Texas' warning, and v4 GA) are directly confirmed by the fetched Geocoding page, and caching/attribution obligations are confirmed by the Places policies page. However, the load-bearing response-shape claims — geometry.viewport.northeast/southwest as a usable bbox, geometry.location, address_components, and the 'no polygon' limitation — cannot be verified because the fetched page is truncated before its Results section, and the 'requires a billed Google Cloud project' claim is also absent. Nothing in the evidence contradicts the entry, so it is partially supported."
+    },
+    {
+      "task_description": "Resolve the user's area input (city name, neighbourhood, postcode, free text) into coordinates and/or a bounding box or polygon that downstream POI search can consume.",
+      "api_name": "Geoapify Geocoding / Places (place filter)",
+      "rank": 3,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Geoapify Places API supports searching within a bounding box via a filter (rect:)",
+          "status": "supported",
+          "note": "The page's example URL uses `filter=rect:-77.039...` and the features section describes searching 'within a bounding box' / 'Within a Visible Area or View Box'."
+        },
+        {
+          "claim": "The filter parameter supports circle: for a radius search",
+          "status": "not_found",
+          "note": "The page states searches can be made 'Within a Radius' but never shows or names a `circle:` filter token."
+        },
+        {
+          "claim": "The filter parameter supports place:<place_id> to search within a city boundary",
+          "status": "not_found",
+          "note": "The page confirms 'Within a City Boundary' and 'explore places within a city' as a capability, but the fetched content nowhere mentions a `place:` filter value or place_id syntax."
+        },
+        {
+          "claim": "Places API can consume geometry from the Isoline API (reachability areas such as a 10-minute walk)",
+          "status": "supported",
+          "note": "The page says 'The Geoapify Places API seamlessly utilizes the geometry generated by the Isoline API as input' and gives the example 'Find Nearby Restaurants within a 10-Minute Walking Distance'."
+        },
+        {
+          "claim": "An API key is required to use the API",
+          "status": "supported",
+          "note": "The 'Getting started' section instructs users to register for an account to receive API credentials including an API key used to authenticate requests."
+        },
+        {
+          "claim": "Underlying data is OpenStreetMap, so ODbL attribution applies",
+          "status": "not_found",
+          "note": "The fetched Places API product page does not mention OpenStreetMap, data sources, or ODbL/attribution requirements."
+        },
+        {
+          "claim": "Places API covers more than 800 categories and subcategories (context for POI search)",
+          "status": "supported",
+          "note": "The page repeatedly states 'more than 800 supported categories and subcategories'."
+        }
+      ],
+      "summary": "The report's core capability claims — bounding-box filtering, radius/city-boundary search, Isoline geometry as input, and the API-key requirement — are all reflected on the fetched product page. However, the specific filter syntax tokens the entry asserts (`circle:` and especially `filter=place:<place_id>`, which is the load-bearing consolidation argument) are not present in the fetched page, and the OpenStreetMap/ODbL attribution claim is unverifiable from it; the entry does honestly flag that pricing and rate limits were not checked."
+    },
+    {
+      "task_description": "Find restaurants within the requested geographic area, optionally filtered by cuisine, price, rating or opening hours.",
+      "api_name": "Foursquare Places API",
+      "rank": 1,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Endpoint is GET https://places-api.foursquare.com/places/search",
+          "status": "supported",
+          "note": "The reference page's curl example shows `--request GET --url https://places-api.foursquare.com/places/search`."
+        },
+        {
+          "claim": "Required header X-Places-Api-Version (e.g. 2025-06-17)",
+          "status": "supported",
+          "note": "The parameter list shows X-Places-Api-Version as string, enum, required, defaulting to 2025-06-17."
+        },
+        {
+          "claim": "Location can be specified via ll+radius, ne+sw bounding box, or near='Chicago, IL'",
+          "status": "supported",
+          "note": "All three parameter groups (ll, radius, ne, sw, near with the exact 'Chicago, IL' example) are documented."
+        },
+        {
+          "claim": "radius max 100,000 m, default 22,000 m",
+          "status": "supported",
+          "note": "Docs state radius range 0 to 100000, max 100,000 meters, and 'If not provided, default radius applied is 22000 meters.'"
+        },
+        {
+          "claim": "Filters include query, fsq_category_ids, fsq_chain_ids / exclude_all_chains, min_price/max_price (1–4), open_now or open_at (DOWTHHMM), sort=RELEVANCE|RATING|DISTANCE|POPULARITY",
+          "status": "supported",
+          "note": "Each of these parameters appears with the stated value ranges/enums, including open_at format DOWTHHMM and price range 1 to 4."
+        },
+        {
+          "claim": "fields= selects the response fields; limit max 50, default 10",
+          "status": "supported",
+          "note": "Docs describe `fields` for choosing returned fields and `limit` as 1 to 50, 'up to 50. Defaults to 10.'"
+        },
+        {
+          "claim": "A single search call returns both `website` and a `menu` URL per place",
+          "status": "supported",
+          "note": "The 200 response schema lists both `menu` (string) and `website` (string) fields on each result object."
+        },
+        {
+          "claim": "Results can be deduped by fsq_place_id",
+          "status": "supported",
+          "note": "The response schema includes `fsq_place_id` on each result."
+        },
+        {
+          "claim": "Using ne/sw or near suppresses global results",
+          "status": "supported",
+          "note": "Docs state for ne, sw and near: 'Global search results will be omitted.'"
+        },
+        {
+          "claim": "Pricing is pay-as-you-go with roughly 10,000 free calls on select Pro endpoints",
+          "status": "supported",
+          "note": "The product page states 'With pay-as-you-go pricing, you only pay for what you need. Test select Pro API endpoints at no charge for up to 10,000 calls.'"
+        },
+        {
+          "claim": "Premium fields cost more (than Pro fields)",
+          "status": "not_found",
+          "note": "The search reference only mentions Pro Fields as the default return set; neither fetched page discusses Premium field pricing."
+        },
+        {
+          "claim": "Foursquare ships an official MCP server",
+          "status": "supported",
+          "note": "The product page links to github.com/foursquare/foursquare-places-mcp for building agents with a Model Context Protocol server."
+        },
+        {
+          "claim": "Licensing is materially friendlier than Google's for assembling menu data",
+          "status": "not_found",
+          "note": "The product page only says 'Flexible licensing, scalable pricing'; no comparison to Google or menu-data terms appears in the fetched docs."
+        },
+        {
+          "claim": "exclude_all_chains cannot be used with exclude_fsq_chain_ids (implied by report's 'fsq_chain_ids / exclude_all_chains' listing)",
+          "status": "supported",
+          "note": "Docs note exclude_fsq_chain_ids 'Cannot be used in conjunction with exclude_all_chains' and vice versa."
+        }
+      ],
+      "summary": "Nearly every concrete, checkable claim about the endpoint path, required version header, location modes, filters, limits, and the presence of `menu`/`website` fields is directly confirmed by the fetched reference page, and the 10,000-free-call pay-as-you-go statement matches the product page. Two softer claims — that Premium fields cost more and that Foursquare's licensing is friendlier than Google's — are not addressed by the fetched pages. The report also honestly flags auth scheme and per-1000-call pricing as unverified, so overall the entry is reliable with minor unsupported embellishments."
+    },
+    {
+      "task_description": "Find restaurants within the requested geographic area, optionally filtered by cuisine, price, rating or opening hours.",
+      "api_name": "Google Places API (New) — Text Search / Nearby Search",
+      "rank": 2,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Endpoint is POST https://places.googleapis.com/v1/places:searchText",
+          "status": "not_found",
+          "note": "The fetched Text Search (New) page content is truncated to navigation, TOC and a page summary; the request URL and HTTP method are not shown in the admissible text."
+        },
+        {
+          "claim": "Requests use an X-Goog-Api-Key header and a mandatory X-Goog-FieldMask header",
+          "status": "not_found",
+          "note": "The page lists 'FieldMask' under 'Required parameters' and the summary says requests require a FieldMask, but the specific HTTP header names X-Goog-Api-Key / X-Goog-FieldMask do not appear in the fetched content."
+        },
+        {
+          "claim": "A field mask is required and omitting it produces an error",
+          "status": "not_found",
+          "note": "FieldMask appears under 'Required parameters' and the summary says requests require a FieldMask, but no statement about an error on omission is present in the fetched text."
+        },
+        {
+          "claim": "Body params include textQuery, includedType, strictTypeFiltering, locationRestriction/locationBias, minRating, openNow, priceLevels, rankPreference, pageSize and pageToken",
+          "status": "supported",
+          "note": "All of these parameter names appear in the page's required/optional parameter listing (textQuery required; includedType, strictTypeFiltering, locationBias, locationRestriction, minRating, openNow, priceLevels, rankPreference, pageSize, pageToken optional)."
+        },
+        {
+          "claim": "Nearby Search (New) is the sibling endpoint for pure radius queries",
+          "status": "not_found",
+          "note": "No Nearby Search documentation was fetched and the Text Search page excerpt does not mention it."
+        },
+        {
+          "claim": "The field mask directly drives cost / billing is based on requested fields",
+          "status": "supported",
+          "note": "The page summary states 'Billing is based on requested data fields' and that FieldMask is specified 'to manage cost and response size'."
+        },
+        {
+          "claim": "Fields are split across Essentials / Pro / Enterprise / Enterprise + Atmosphere SKUs, and requesting websiteUri pushes you into the Enterprise tier",
+          "status": "not_found",
+          "note": "No SKU tier names or per-field SKU mapping appear anywhere in the fetched pages."
+        },
+        {
+          "claim": "Docs state the result list 'is not guaranteed to be consistent for identical requests'",
+          "status": "not_found",
+          "note": "This quoted sentence does not appear in the fetched (truncated) Text Search page or the policies page."
+        },
+        {
+          "claim": "Policy forbids pre-fetching, caching or storing Places content, with place_id exempt",
+          "status": "supported",
+          "note": "The policies page states you must not pre-fetch, cache, or store Places API content beyond allowed exceptions and that the place ID (returned in place_id) is exempt and can be stored indefinitely."
+        },
+        {
+          "claim": "Requires publishing Terms of Use and a privacy policy incorporating Google's",
+          "status": "supported",
+          "note": "The policies page summary states applications must provide publicly accessible Terms of Use and a Privacy Policy that incorporate Google's Terms of Service and Privacy Policy."
+        },
+        {
+          "claim": "Requires Google Maps attribution",
+          "status": "supported",
+          "note": "The policies page has a dedicated 'Google Maps attribution requirements' section mandating logo or 'Google Maps' text attribution and third-party provider attributions."
+        },
+        {
+          "claim": "Separate EEA terms apply to customers with EEA billing addresses",
+          "status": "supported",
+          "note": "The policies page states the product has different Terms of Service for customers with a billing address in the European Economic Area and links EEA-specific terms."
+        }
+      ],
+      "summary": "The policy-related claims and the list of request body parameters are well supported by the fetched pages, and the field-mask/billing relationship is confirmed. However, several load-bearing technical details — the exact endpoint URL and method, the X-Goog-Api-Key/X-Goog-FieldMask header names, the SKU tier breakdown placing websiteUri in Enterprise, the quoted 'not guaranteed to be consistent' sentence, and the Nearby Search sibling endpoint — are absent from the admissible content (the Text Search page was fetched only as navigation plus a summary). Nothing is contradicted, so this is partially supported."
+    },
+    {
+      "task_description": "Find restaurants within the requested geographic area, optionally filtered by cuisine, price, rating or opening hours.",
+      "api_name": "Geoapify Places API (OpenStreetMap-backed)",
+      "rank": 3,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Endpoint is GET https://api.geoapify.com/v2/places with categories, filter=rect:lon1,lat1,lon2,lat2 and apiKey parameters",
+          "status": "supported",
+          "note": "The page shows an example URL 'https://api.geoapify.com/v2/places?categories=healthcare&filter=rect:-77.039...' and states an API key authenticates requests."
+        },
+        {
+          "claim": "filter supports circle: (radius), place: (city boundary) and isoline geometries",
+          "status": "supported",
+          "note": "The page describes searching within a bounding box, within a radius, within a city boundary, and using Isoline API geometry as input, though the exact parameter prefixes (circle:, place:) are not shown."
+        },
+        {
+          "claim": "bias= parameter provides proximity ranking",
+          "status": "supported",
+          "note": "The page states the API supports searching for places with proximity bias 'using the \"bias\" parameter'."
+        },
+        {
+          "claim": "Requires an API key (apiKey=KEY) for authentication",
+          "status": "supported",
+          "note": "Getting started section says registering yields API credentials including an API key used to authenticate Places API requests."
+        },
+        {
+          "claim": "limit=100 parameter (and limit ceilings/pagination) — report notes these are unverified",
+          "status": "not_found",
+          "note": "The page mentions retrieving e.g. '100 Nearest Tourist Attractions' but never documents a limit parameter or its ceiling; the report explicitly flags this as unverified."
+        },
+        {
+          "claim": "Returns a GeoJSON FeatureCollection with place_id per feature",
+          "status": "not_found",
+          "note": "The fetched page does not describe the response format or any place_id field."
+        },
+        {
+          "claim": "A separate Place Details API returns contact info and opening hours for one place",
+          "status": "supported",
+          "note": "The page describes the Place Details API returning structured data including address, contact information and opening hours for a specific place."
+        },
+        {
+          "claim": "Cuisine taxonomy includes catering.restaurant.italian",
+          "status": "supported",
+          "note": "The categories table lists 'catering.restaurant.italian' as a catering subcategory example."
+        },
+        {
+          "claim": "Conditions include vegan.only and internet_access",
+          "status": "supported",
+          "note": "The conditions section gives an example combining 'catering.restaurant' with 'internet_access' and 'vegan.only'."
+        },
+        {
+          "claim": "Base category catering.restaurant exists for restaurant sweeps",
+          "status": "supported",
+          "note": "Catering top-level category is documented and 'catering.restaurant' is used in a conditions example."
+        },
+        {
+          "claim": "It is the cheapest option / pricing tiers and rate limits",
+          "status": "not_found",
+          "note": "The fetched page's pricing section content was not included, so no pricing or rate-limit figures are verifiable (the report also flags pricing as unverified)."
+        },
+        {
+          "claim": "Data is OpenStreetMap-backed and licensed under ODbL, imposing attribution/share-alike obligations",
+          "status": "not_found",
+          "note": "The fetched page never mentions OpenStreetMap or ODbL licensing."
+        },
+        {
+          "claim": "OSM POI records often lack a website tag, and coverage varies by country",
+          "status": "not_found",
+          "note": "No statement about data source completeness, website tags, or geographic coverage variance appears on the page."
+        }
+      ],
+      "summary": "The core technical claims about the endpoint path, API key auth, filter/bias options, category and condition names, and the separate Place Details API are all directly supported by the product page. Claims about the response format (GeoJSON FeatureCollection, place_id), the underlying OpenStreetMap/ODbL data source, and cost-competitiveness are not present on this page; the report itself honestly flags limits, pagination, rate limits and pricing as unverified, but the OSM/ODbL framing in the api_name and challenges section is asserted without support from the cited page."
+    },
+    {
+      "task_description": "Find restaurants within the requested geographic area, optionally filtered by cuisine, price, rating or opening hours.",
+      "api_name": "Overpass API (OpenStreetMap)",
+      "rank": 4,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Nominatim's own documentation points users to the Overpass API for exhaustive 'all objects of a type in an area' downloads.",
+          "status": "supported",
+          "note": "The Nominatim Search docs note: 'Special phrases are not suitable to query all objects of a certain type in an area... To download OSM data by object type, use the Overpass API.'"
+        },
+        {
+          "claim": "Queries are sent by POST or GET to an Overpass endpoint (i.e. both HTTP methods supported, at an interpreter endpoint).",
+          "status": "not_found",
+          "note": "The fetched Overpass commons page discusses queries, quotas and status requests but never states the endpoint path or which HTTP methods are accepted."
+        },
+        {
+          "claim": "A query of the form '[timeout:90]; nwr[amenity=restaurant]({{bbox}}); out center;' is valid Overpass QL.",
+          "status": "supported",
+          "note": "The page shows the identical structure as its worked example, '[timeout:90];\\nnwr[shop=supermarket]({{bbox}});\\nout center;'."
+        },
+        {
+          "claim": "Prefix declarations [timeout:N] and [maxsize:N] control the server's admission decision, with defaults of 180 seconds and 512 MiB.",
+          "status": "supported",
+          "note": "Doc: 'If no maximum run time is declared then a default limit of 180 seconds applies. For the maximum memory usage, the default value is 512 MiB', and the server admits a request based on these declared limits."
+        },
+        {
+          "claim": "Public instances are explicitly not intended as a backend for general-purpose apps.",
+          "status": "supported",
+          "note": "Listed problematic behaviour includes 'Setting up an app for more than just OSM mappers and relying on the public instances as backend', for which 'only running your own instance sustainably serves your mission'."
+        },
+        {
+          "claim": "Guidance is a maximum of about 10,000 requests/day and under 1 GB/day download volume.",
+          "status": "supported",
+          "note": "Doc: 'users are expected to send a maximum of about 10000 requests per day and keep their download volume below about 1 GB per day.'"
+        },
+        {
+          "claim": "Rate limiting is per-IP and slot-based with cool-down times.",
+          "status": "supported",
+          "note": "Doc: 'Requests usually are assigned by taking the IP address as the user'; each execution 'occupies one of the slots available to the user... plus a cool down time'."
+        },
+        {
+          "claim": "HTTP 429 is returned when a request is denied by the rate limit.",
+          "status": "supported",
+          "note": "Doc: 'Requests that are denied due to the rate limit are answered with the HTTP status code 429.'"
+        },
+        {
+          "claim": "HTTP 504 is returned when a request would exceed available resources.",
+          "status": "supported",
+          "note": "Doc: 'Requests that have been denied due to this resource mismatch are answered with an HTTP status code 504.'"
+        },
+        {
+          "claim": "'Stitching bounding boxes' is named as problematic behaviour, and such users are told to self-host or use a planet dump.",
+          "status": "supported",
+          "note": "Problematic behaviour item 3 is 'Stiching bounding boxes to scrape the full data of the complete world', with the advice to use a planet dump or run one's own instance."
+        }
+      ],
+      "summary": "Nearly every checkable claim in this entry — the 10,000 requests/day and 1 GB/day guidance, slot/IP-based rate limiting with cool-downs, 429 and 504 semantics, the 180 s / 512 MiB defaults, the named problematic behaviours, and Nominatim's pointer to Overpass — is directly stated in the fetched pages, sometimes near-verbatim. The only unverified element is the transport detail ('POST/GET to an Overpass endpoint'), which the fetched commons page never addresses since it documents quotas rather than the HTTP interface. Overall the entry is accurate and closely grounded in its cited sources."
+    },
+    {
+      "task_description": "For a specific restaurant, retrieve its official website URL plus supporting metadata (phone, address, hours, price level) needed to locate and date-stamp the menu.",
+      "api_name": "Foursquare Places API",
+      "rank": 1,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "The place search endpoint is GET /places/search (host places-api.foursquare.com)",
+          "status": "supported",
+          "note": "The reference page's sample request is `curl --request GET --url https://places-api.foursquare.com/places/search`."
+        },
+        {
+          "claim": "The place object returned by /places/search includes `website`, `menu`, `tel`, `email`, `rating`, `price`, and `date_refreshed`",
+          "status": "supported",
+          "note": "All of these appear as top-level fields in the 200 response schema and sample JSON on the place-search reference page."
+        },
+        {
+          "claim": "The response includes hours{display, open_now, regular[{day, open, close}]} and hours_popular",
+          "status": "supported",
+          "note": "The sample response shows `hours` with `display`, `open_now`, and `regular[{close, day, open}]`, plus a `hours_popular` array of {close, day, open}."
+        },
+        {
+          "claim": "The response includes location{address, locality, region, postcode, country, formatted_address}",
+          "status": "supported",
+          "note": "The sample `location` object lists address, locality, region, postcode, admin_region, post_town, po_box, country, formatted_address."
+        },
+        {
+          "claim": "The response includes attributes{delivery, reservations, outdoor_seating, wifi, takes_credit_card}",
+          "status": "supported",
+          "note": "The sample `attributes` object contains restroom, outdoor_seating, atm, has_parking, wifi, delivery, reservations, takes_credit_card."
+        },
+        {
+          "claim": "The response includes social_media{instagram, facebook_id, twitter}",
+          "status": "not_found",
+          "note": "A `social_media object` is listed in the schema, but the fetched page (truncated before its expansion) never enumerates instagram, facebook_id, or twitter subfields."
+        },
+        {
+          "claim": "The response includes related_places{parent, children}",
+          "status": "not_found",
+          "note": "`related_places` exists and the sample shows a `parent` sub-object, but the fetched excerpt is truncated before any `children` field is shown."
+        },
+        {
+          "claim": "A `fields=` parameter lets you request only the fields you need",
+          "status": "supported",
+          "note": "The `fields` parameter is documented: \"Indicate which fields to return in the response, separated by commas\"; defaults to Pro Fields."
+        },
+        {
+          "claim": "There is a place-details endpoint that returns the same place object",
+          "status": "not_found",
+          "note": "Only the place-search reference page was fetched; it does not mention or document a place-details endpoint."
+        },
+        {
+          "claim": "The `menu` field is a URL rather than menu content",
+          "status": "not_found",
+          "note": "The schema lists `menu` only as type `string` with no description indicating it holds a URL."
+        },
+        {
+          "claim": "Premium fields may cost more than Pro fields / field-level pricing",
+          "status": "not_found",
+          "note": "The page references \"Pro Fields\" as the default field set but says nothing about premium tiers or pricing (and the report already flags this as unverified)."
+        }
+      ],
+      "summary": "The core, load-bearing claims — the GET /places/search endpoint and the presence of website, menu, tel, email, hours, hours_popular, location, rating, price, date_refreshed, attributes, and the fields= parameter — are all directly confirmed by the fetched reference page. A few secondary details (social_media subfield names, related_places.children, the existence of a separate place-details endpoint, and that `menu` is specifically a URL) are not visible in the fetched, partially truncated page, and pricing/field-tier claims are absent but were self-flagged as unverified. Nothing in the documentation contradicts the entry."
+    },
+    {
+      "task_description": "For a specific restaurant, retrieve its official website URL plus supporting metadata (phone, address, hours, price level) needed to locate and date-stamp the menu.",
+      "api_name": "Google Places API (New) — Place Details",
+      "rank": 2,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Place Details (New) is an HTTP GET request to https://places.googleapis.com/v1/places/{PLACE_ID}",
+          "status": "supported",
+          "note": "The place-details page states: 'A Place Details (New) request is an HTTP GET request in the form: https://places.googleapis.com/v1/places/PLACE_ID'."
+        },
+        {
+          "claim": "Requests use the X-Goog-Api-Key and X-Goog-FieldMask headers",
+          "status": "supported",
+          "note": "The curl example shows -H \"X-Goog-Api-Key: API_KEY\" and -H \"X-Goog-FieldMask: id,displayName\", and the FieldMask section names the X-Goog-FieldMask header."
+        },
+        {
+          "claim": "A field mask is required (fields=* retrieves all fields)",
+          "status": "supported",
+          "note": "The page says there is no default field list, omitting the mask returns an error, and 'Use * to retrieve all fields'."
+        },
+        {
+          "claim": "Relevant response fields include websiteUri, nationalPhoneNumber/internationalPhoneNumber, regularOpeningHours, currentOpeningHours, priceLevel, priceRange, rating, userRatingCount",
+          "status": "not_found",
+          "note": "The fetched page is truncated in the middle of the SKU field lists (only the IDs-Only and start of Essentials SKU appear) and never names these specific fields; it only generically mentions 'complete address, phone number, user rating and reviews'."
+        },
+        {
+          "claim": "websiteUri, rating and userRatingCount belong to the Enterprise SKU",
+          "status": "not_found",
+          "note": "The fetched excerpt lists only the Place Details Essentials IDs Only SKU fields and cuts off before any Enterprise SKU field list."
+        },
+        {
+          "claim": "editorialSummary, servesLunch/servesDinner/servesVegetarianFood, menuForChildren, reviews, takeout, delivery, dineIn, reservable belong to the Enterprise + Atmosphere SKU",
+          "status": "not_found",
+          "note": "No Enterprise+Atmosphere SKU field list appears in the fetched documentation."
+        },
+        {
+          "claim": "There is no dish-level menu field in the Place object; menuForChildren is a boolean amenity flag, not a menu",
+          "status": "not_found",
+          "note": "The Place object field reference was not among the fetched pages, so neither the absence of a menu field nor menuForChildren's type is evidenced."
+        },
+        {
+          "claim": "Caching/storage of returned content is prohibited except for place_id",
+          "status": "supported",
+          "note": "The policies page summary states you must not pre-fetch, cache or store Places API content beyond allowed exceptions, and the place ID is 'exempt from the caching restrictions' and may be stored indefinitely."
+        },
+        {
+          "claim": "Attribution plus published Terms of Use and privacy policy are required",
+          "status": "supported",
+          "note": "The policies page requires publicly accessible Terms of Use and Privacy Policy incorporating Google's, and devotes a section to mandatory Google Maps attribution requirements."
+        },
+        {
+          "claim": "EEA billing addresses fall under separate terms",
+          "status": "supported",
+          "note": "The policies page states the product has different Terms of Service (and possibly functionality) for customers with an EEA billing address, linking EEA-specific terms."
+        },
+        {
+          "claim": "A naive fields=* mask is very costly at scale because of SKU tiering",
+          "status": "not_found",
+          "note": "The page warns that field masking helps 'avoid unnecessary processing time and billing charges' and references per-SKU billing, but the fetched text does not establish the relative cost of the SKUs containing the cited fields."
+        }
+      ],
+      "summary": "The mechanical API facts (endpoint path, GET method, X-Goog-Api-Key / X-Goog-FieldMask headers, mandatory field mask) and all the policy claims (caching prohibition with place_id exemption, attribution and ToS/privacy requirements, separate EEA terms) are directly confirmed by the fetched pages. However, the fetched place-details page is truncated just after the IDs-Only SKU field list, so none of the specific field names (websiteUri, regularOpeningHours, priceLevel, menuForChildren, serves*) or their SKU tier assignments — including the claim that no dish-level menu field exists — can be verified from the admissible evidence. The entry is plausible and its verifiable parts hold up, but its field-level and pricing-tier detail rests on documentation not present here."
+    },
+    {
+      "task_description": "For a specific restaurant, retrieve its official website URL plus supporting metadata (phone, address, hours, price level) needed to locate and date-stamp the menu.",
+      "api_name": "Geoapify Place Details API",
+      "rank": 3,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "A Place Details API exists and returns enriched structured data covering address, contact information and opening hours, plus the place geometry.",
+          "status": "supported",
+          "note": "The Places API page states the Place Details API 'provides you with the place's geometry, enriched with structured data ... such as its address, contact information, opening hours, and more.'"
+        },
+        {
+          "claim": "The Place Details API is used to request details about a specific place returned by the Places API.",
+          "status": "supported",
+          "note": "The page says it 'allows you to request detailed data about a specific place returned by the Places API.'"
+        },
+        {
+          "claim": "The Place Details API takes a `place_id` parameter as input.",
+          "status": "not_found",
+          "note": "The fetched page only says details are requested for 'a specific place returned by the Places API' and never names a place_id parameter or shows the endpoint's request signature."
+        },
+        {
+          "claim": "The data is OSM-based (OpenStreetMap sourced), so OSM contact/website tags may be sparse/stale.",
+          "status": "not_found",
+          "note": "The fetched Places API page makes no mention of OpenStreetMap or its data source at all."
+        },
+        {
+          "claim": "ODbL attribution applies.",
+          "status": "not_found",
+          "note": "No licensing or attribution terms appear anywhere on the fetched page."
+        },
+        {
+          "claim": "The API is 'cheap' / low-cost enrichment.",
+          "status": "not_found",
+          "note": "The fetched page links to a pricing section but the fetched content contains no pricing figures or tiers (the report itself flags pricing as unverified)."
+        },
+        {
+          "claim": "An API key obtained by registering a Geoapify account is required to authenticate requests.",
+          "status": "supported",
+          "note": "The page's Getting Started section says to register for an account to receive an API key that 'will be used to authenticate your requests to the Places API' (stated for the Places API, not specifically Place Details)."
+        }
+      ],
+      "summary": "The entry's core capability claim — that Geoapify's Place Details API returns geometry plus structured address, contact information and opening hours for a place found via the Places API — is directly and accurately supported by the cited page. Several supporting details (the place_id input parameter, OSM sourcing, ODbL attribution, low cost) are absent from the only fetched page; the report honestly flags pricing and field names as unverified, but not the place_id, OSM-sourcing, or ODbL assertions. Overall the entry is cautiously and largely accurately framed, with a few unsupported peripheral details."
+    },
+    {
+      "task_description": "Fetch the restaurant's public website, find the page (or PDF) that holds the menu, and convert it into clean text suitable for parsing.",
+      "api_name": "Firecrawl",
+      "rank": 1,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "POST /v2/map accepts {url, search, sitemap:'include'|'only'|'skip', includeSubdomains, ignoreQueryParameters, limit, ignoreCache} and returns links[{url,title,description}]",
+          "status": "supported",
+          "note": "The map reference lists exactly these body params (sitemap enum skip/include/only, default include) and a 200 response of success + links[] with url/title/description child attributes."
+        },
+        {
+          "claim": "POST /v2/scrape accepts onlyMainContent, includeTags, excludeTags, waitFor, actions[], parsers:['pdf'], location{country,languages}, proxy, maxAge, timeout",
+          "status": "supported",
+          "note": "All of these fields appear in the scrape endpoint's example request payload (including parsers:['pdf'], actions:[{type:'wait'}], location:{country:'US',languages:['en-US']}, proxy:'auto', maxAge, timeout)."
+        },
+        {
+          "claim": "Scrape formats can be ['markdown','html','json','summary','screenshot']",
+          "status": "not_found",
+          "note": "The fetched scrape page only shows formats:['markdown'] in examples and a response object containing markdown/summary/html/rawHtml/screenshot; the formats enum (and a 'json' format) is not present in the fetched content."
+        },
+        {
+          "claim": "Scrape response includes {markdown, links, metadata{title, statusCode, contentType, numPages}}",
+          "status": "supported",
+          "note": "The 200 sample response contains data.markdown, data.links[], and metadata with title, statusCode, numPages and contentType."
+        },
+        {
+          "claim": "Both endpoints use Authorization: Bearer <token>",
+          "status": "supported",
+          "note": "Both reference pages show the header 'Authorization: Bearer <token>' and the map page documents it as a required bearer auth header."
+        },
+        {
+          "claim": "Map, crawl, extract and batch-scrape all require an API key; keyless access covers only Search, Scrape and Parse",
+          "status": "supported",
+          "note": "Rate-limits page: the keyless MCP endpoint 'exposes exactly Search, Scrape, and Parse' and 'No other endpoints (crawl, extract, map, batch scrape, etc.) are available without a key' — though the same page notes keyless via official clients/SDKs/REST also includes Interact and some research/search endpoints, so 'only' is slightly incomplete."
+        },
+        {
+          "claim": "Free plan is 2 concurrent browsers and 10 req/min on /scrape and /map",
+          "status": "supported",
+          "note": "Concurrency table lists Free = 2 concurrent browsers and the rate-limit table lists Free = 10 for both /scrape and /map."
+        },
+        {
+          "claim": "Standard is 50 concurrent / 500 req/min",
+          "status": "supported",
+          "note": "Tables show Standard = 50 concurrent browsers and 500 for /scrape, /map, /search."
+        },
+        {
+          "claim": "429 is returned on either rate or concurrency limit",
+          "status": "supported",
+          "note": "Rate-limits page states both limits are set by plan and 'exceeding either returns a 429 response', and exceeding max queued jobs also returns 429."
+        },
+        {
+          "claim": "402 when credits run out",
+          "status": "supported",
+          "note": "Both endpoint pages document a 402 response with body {'error':'Payment required to access this resource.'}, consistent with exhausted credits though 'credits' is not named."
+        },
+        {
+          "claim": "Credits are consumed per page and JSON/AI extraction costs more than a plain scrape",
+          "status": "not_found",
+          "note": "The rate-limits page confirms 'Interact and JSON extraction cost more than a basic scrape' for keyless credit caps, but nothing in the fetched pages states credits are consumed per page."
+        },
+        {
+          "claim": "Sitemap results are cached up to 7 days; ignoreCache bypasses the cache",
+          "status": "supported",
+          "note": "Map body param ignoreCache: 'Bypass the sitemap cache... Sitemap data is cached for up to 7 days.'"
+        },
+        {
+          "claim": "Firecrawl has an official MCP server",
+          "status": "supported",
+          "note": "The rate-limits page refers to 'The hosted Firecrawl MCP keyless endpoint' and 'hosted MCP tools', implying an official MCP offering."
+        },
+        {
+          "claim": "You remain responsible for robots.txt and each site's terms",
+          "status": "not_found",
+          "note": "None of the three fetched pages discuss robots.txt or site terms of service."
+        }
+      ],
+      "summary": "Nearly all concrete, checkable claims — endpoint paths, methods, bearer auth, map/scrape parameter and response field names, 7-day sitemap cache, Free/Standard rate and concurrency figures, 402/429 semantics — are directly confirmed by the fetched reference and rate-limit pages. Two secondary details are unverifiable from these pages: the full scrape formats list (notably 'json') and the 'credits consumed per page' cost model, plus the robots.txt caution. One nuance: the docs note keyless access via official clients/REST also includes Interact and some research/search endpoints, so the report's 'only Search, Scrape and Parse' is slightly narrower than the docs state."
+    },
+    {
+      "task_description": "Fetch the restaurant's public website, find the page (or PDF) that holds the menu, and convert it into clean text suitable for parsing.",
+      "api_name": "Jina Reader API",
+      "rank": 2,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "GET https://r.jina.ai/<encoded-target-url> returns LLM-friendly markdown by prepending r.jina.ai to the URL",
+          "status": "supported",
+          "note": "The page states \"Convert a URL to LLM-friendly input by prepending r.jina.ai\" and shows `curl \"https://r.jina.ai/https://www.example.com\"`."
+        },
+        {
+          "claim": "Sending Accept: application/json returns a JSON object with url, title, content, and timestamp",
+          "status": "supported",
+          "note": "The 'JSON Response' / Accept parameter says the response \"will be in JSON format, containing the URL, title, content, and timestamp (if available).\""
+        },
+        {
+          "claim": "Control headers include X-Target-Selector, X-Wait-For-Selector, X-Remove-Selector, X-Timeout, X-Token-Budget, X-Proxy (country), X-No-Cache, X-Cache-Tolerance, X-With-Generated-Alt, X-Robots-Txt, X-With-Iframe, X-With-Shadow-Dom",
+          "status": "supported",
+          "note": "All of these header names appear in the parameters list with matching descriptions (e.g. X-Proxy \"Set country code for location-based proxy server\", X-With-Generated-Alt captions images)."
+        },
+        {
+          "claim": "X-Respond-With: ReaderLM-v2 is available and ReaderLM-v2 costs 3x tokens",
+          "status": "supported",
+          "note": "The X-Respond-With parameter says \"Uses ReaderLM-v2 for HTML to Markdown conversion... Costs 3x tokens!\""
+        },
+        {
+          "claim": "https://s.jina.ai/?q= gives web search results as clean text",
+          "status": "supported",
+          "note": "Page: \"Simply prepend https://s.jina.ai/?q= to your query, and Reader will search the web and return the top five results with their URLs and contents, each in clean, LLM-friendly text.\""
+        },
+        {
+          "claim": "Native PDF parsing and image captioning are supported",
+          "status": "supported",
+          "note": "The page lists a 'Local PDF/HTML file' upload option (\"Only support pdf and html files\") and X-With-Generated-Alt for VLM-style image captions."
+        },
+        {
+          "claim": "No key is needed for prototyping",
+          "status": "not_found",
+          "note": "The page shows a keyless curl example and an optional \"Add API Key for Higher Rate Limit\" field, but never explicitly states keyless usage is permitted or its terms."
+        },
+        {
+          "claim": "Keyless use is capped at 20 RPM; a free or paid key raises that to 500 RPM and premium to 5,000 RPM",
+          "status": "not_found",
+          "note": "The fetched page only links to a rate-limit table/dashboard; no numeric RPM figures appear in the content."
+        },
+        {
+          "claim": "Billing is by output tokens, so long menu pages cost more",
+          "status": "not_found",
+          "note": "The fetched page mentions 'Pricing', 'Available tokens' and X-Token-Budget but contains no statement that billing is based on output tokens."
+        },
+        {
+          "claim": "s.jina.ai is blocked without a key and each search request carries a fixed floor of 10,000 tokens",
+          "status": "not_found",
+          "note": "Nothing on the fetched page mentions a key requirement for s.jina.ai or a 10,000-token minimum charge."
+        },
+        {
+          "claim": "Robots.txt compliance is opt-in via X-Robots-Txt rather than default",
+          "status": "supported",
+          "note": "X-Robots-Txt is listed as an optional parameter: \"Check robots.txt rules before fetching. Specify which bot name to use for the check.\""
+        },
+        {
+          "claim": "There is no sitemap/link-discovery endpoint, so you must find the menu page yourself",
+          "status": "not_found",
+          "note": "The page documents no sitemap endpoint, but it does offer X-With-Links-Summary (a \"Buttons & Links\" section \"to help downstream LLMs or web agents navigate the page\"), so the absence claim is not directly confirmed."
+        }
+      ],
+      "summary": "The endpoint, response-shape, header, PDF/image, and ReaderLM-v2 claims are all directly confirmed by the Reader product page. However, the quantitative claims that carry most of the cost/limits analysis — 20/500/5,000 RPM tiers, output-token billing, s.jina.ai key requirement and a 10,000-token search floor — appear nowhere in the fetched page, and the 'no link discovery' framing is undercut by the documented links-summary feature. No claim is outright contradicted, so the entry is partially supported."
+    },
+    {
+      "task_description": "Fetch the restaurant's public website, find the page (or PDF) that holds the menu, and convert it into clean text suitable for parsing.",
+      "api_name": "Google Places API (New) — as a negative finding",
+      "rank": 3,
+      "verdict": "unsupported",
+      "checked_claims": [
+        {
+          "claim": "Place Details (New) exposes a boolean field named `menuForChildren`.",
+          "status": "not_found",
+          "note": "The fetched Place Details page is truncated mid-way through the field-mask SKU listings (it stops inside the Place Details Essentials SKU section), so no `menuForChildren` field appears anywhere in the admissible text."
+        },
+        {
+          "claim": "Place Details exposes boolean amenity fields servesBreakfast/Lunch/Dinner/Brunch/Dessert, servesBeer/Wine/Cocktails/Coffee and servesVegetarianFood.",
+          "status": "not_found",
+          "note": "None of these field names appear in the fetched content; the field enumeration is cut off before the Pro/Enterprise/Atmosphere lists."
+        },
+        {
+          "claim": "Those amenity/menu booleans belong to the 'Enterprise + Atmosphere' SKU.",
+          "status": "not_found",
+          "note": "The fetched page only names the 'Place Details Essentials IDs Only SKU' and the beginning of the 'Place Details Essentials SKU'; no Enterprise or Atmosphere SKU content is present."
+        },
+        {
+          "claim": "`websiteUri` is available and is billed under the Enterprise SKU.",
+          "status": "not_found",
+          "note": "`websiteUri` is not mentioned anywhere in the fetched page, nor is any Enterprise SKU field list."
+        },
+        {
+          "claim": "There is no Google API that returns dish-level menu content for arbitrary restaurants (the negative finding).",
+          "status": "not_found",
+          "note": "The truncated page neither lists a menu-content field nor states any such limitation, so the negative finding cannot be confirmed from this evidence."
+        },
+        {
+          "claim": "Combining Google place data with scraped content in a stored dataset compounds a 'Google caching restriction'.",
+          "status": "not_found",
+          "note": "The fetched documentation contains no terms-of-service, caching, or storage restriction language; that would be in the Maps Platform Terms, which was not fetched."
+        },
+        {
+          "claim": "Place Details is retrieved via an HTTP GET to https://places.googleapis.com/v1/places/PLACE_ID and requires a field mask.",
+          "status": "supported",
+          "note": "The page states 'A Place Details (New) request is an HTTP GET request in the form: https://places.googleapis.com/v1/places/PLACE_ID' and that omitting the FieldMask returns an error."
+        }
+      ],
+      "summary": "Only the generic mechanics of the Place Details endpoint (GET URL form, mandatory field mask, Place response object) are confirmed by the fetched page; the entry's load-bearing specifics — the menuForChildren and serves* boolean field names, websiteUri, their assignment to Enterprise/Atmosphere SKUs, and the caching restriction — appear nowhere in the admissible text because the field enumeration is truncated after the Essentials SKUs. The central negative finding (no Google API returns dish-level menus) is plausible but unverifiable from this evidence. The entry would need the field-list/SKU reference pages (e.g. the 'choose fields' or SKU details pages) and the Maps Platform Terms to be substantiated."
+    },
+    {
+      "task_description": "Parse the fetched menu content into structured menu data: sections, dish names, descriptions, prices, currency and dietary tags.",
+      "api_name": "Firecrawl (native `menu` format)",
+      "rank": 1,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Menu extraction is available via POST to https://api.firecrawl.dev/v2/scrape",
+          "status": "supported",
+          "note": "The scrape reference documents a POST to https://api.firecrawl.dev/v2/scrape and its 200 response includes a `data.menu` object."
+        },
+        {
+          "claim": "Authentication uses a bearer token in the Authorization header",
+          "status": "supported",
+          "note": "All code samples send `Authorization: Bearer <token>`."
+        },
+        {
+          "claim": "Response contains `data.menu` with an `isMenu` flag",
+          "status": "supported",
+          "note": "The 200 response example shows `\"menu\": { \"isMenu\": true, \"sections\": [...] }`."
+        },
+        {
+          "claim": "Menu sections contain `name` and `items[]`, and items carry `name`, `id`, `description`, `images[{url, alt}]`",
+          "status": "supported",
+          "note": "The visible portion of the menu schema shows section `name`, `items`, and item `name`, `id`, `description`, `images[{url, alt}]`."
+        },
+        {
+          "claim": "Menu sections also have an `id` and `description`",
+          "status": "not_found",
+          "note": "The fetched response example only shows `name` and `items` for sections; the sample is truncated before any further section fields."
+        },
+        {
+          "claim": "Menu items include a structured price object `{amount, currency, formatted}`",
+          "status": "not_found",
+          "note": "The response example is cut off exactly at the item's `\"price\": {` line; the `{amount, currency, formatted}` shape appears only under `product.variants`, not confirmed for menu items."
+        },
+        {
+          "claim": "Menu items include `availability{inStock, text}`, `dietary[]`, `calories`, `optionGroups[]`, `identifiers{merchantItemId}`, `url`, `sourceUrl`",
+          "status": "not_found",
+          "note": "None of these fields appear in the fetched (truncated) menu schema; `availability{inStock,text}` is shown only for product variants."
+        },
+        {
+          "claim": "The menu object includes a `confidence` score you can threshold on, plus `merchant{name, type}`, `currency` and `sourceUrl`",
+          "status": "not_found",
+          "note": "The fetched documentation is truncated inside the menu items array and never shows `confidence`, `merchant`, top-level `currency` or `sourceUrl` for menu."
+        },
+        {
+          "claim": "AI/JSON extraction is documented as costing more credits than a plain scrape",
+          "status": "supported",
+          "note": "The rate-limits page states operations cost different credit amounts, \"for example, Interact and JSON extraction cost more than a basic scrape\"."
+        },
+        {
+          "claim": "Rate/concurrency limits return 429",
+          "status": "supported",
+          "note": "The rate-limits page states exceeding rate or concurrency limits returns a `429` response."
+        },
+        {
+          "claim": "A 402 response occurs on credit exhaustion",
+          "status": "not_found",
+          "note": "The scrape page lists 402 among the response codes but the fetched pages never state that 402 signifies credit exhaustion."
+        }
+      ],
+      "summary": "The entry's headline claims — that `/v2/scrape` (POST, bearer auth) returns a native `menu` object with `isMenu` and sections of items bearing name/id/description/images, and that 429s apply — are directly supported by the fetched pages. However, the fetched scrape reference is truncated mid-schema, so the report's most load-bearing selling points (structured price for menu items, dietary tags, calories, optionGroups, merchant, and especially the `confidence` score used for thresholding) are not present in the admissible evidence, and the 402-as-credit-exhaustion reading is also unstated. Directionally accurate but a substantial share of the detailed schema is unverified."
+    },
+    {
+      "task_description": "Parse the fetched menu content into structured menu data: sections, dish names, descriptions, prices, currency and dietary tags.",
+      "api_name": "OpenAI Structured Outputs (Responses / Chat Completions API)",
+      "rank": 2,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "Structured Outputs on the Responses API uses a body of the form text:{format:{type:'json_schema', name:..., strict:true, schema:{...}}}",
+          "status": "supported",
+          "note": "The Ruby Responses example on the page shows exactly `text: { format: { type: :json_schema, name: \"event\", strict: true, schema: event_schema } }`."
+        },
+        {
+          "claim": "Chat Completions uses response_format:{type:'json_schema', json_schema:{strict:true, schema:{...}}}",
+          "status": "supported",
+          "note": "The Ruby Chat Completions example shows `response_format: {type: :json_schema, json_schema: {name: \"event\", strict: true, schema: event_schema}}`, and the prose refers to a `json_schema` response format."
+        },
+        {
+          "claim": "The REST endpoint paths are POST /v1/responses and POST /v1/chat/completions",
+          "status": "not_found",
+          "note": "The fetched guide only demonstrates SDK calls (client.responses.*, client.chat.completions.*) and never states the literal HTTP method or /v1/... paths."
+        },
+        {
+          "claim": "Python SDK helper accepts a Pydantic model via client.responses.parse(text_format=...) and returns response.output_parsed",
+          "status": "supported",
+          "note": "The page's Python Responses example calls `client.responses.parse(..., text_format=CalendarEvent)` then `event = response.output_parsed`."
+        },
+        {
+          "claim": "JavaScript SDK supports Zod schemas via zodTextFormat",
+          "status": "supported",
+          "note": "The JS Responses example imports `zodTextFormat` from openai/helpers/zod and passes it as `text.format`."
+        },
+        {
+          "claim": "Supported from GPT-4o / gpt-4o-mini-2024-07-18 snapshots onward",
+          "status": "supported",
+          "note": "Page states Structured Outputs is available 'starting with GPT-4o' and that json_schema response_format 'is only supported with the gpt-4o-mini, gpt-4o-mini-2024-07-18, and gpt-4o-2024-08-06 model snapshots and later'."
+        },
+        {
+          "claim": "Model refusals are programmatically detectable",
+          "status": "supported",
+          "note": "Benefit list says 'Explicit refusals: Safety-based model refusals are now programmatically detectable.'"
+        },
+        {
+          "claim": "There are documented limits on which JSON Schema constructs are supported ('supported schemas' section)",
+          "status": "supported",
+          "note": "The comparison table's 'Adheres to schema' row links to a 'supported schemas' section, confirming such documented constraints exist, though the fetched text is truncated before the details."
+        },
+        {
+          "claim": "Schema adherence is guaranteed (no missing required keys / invalid enum values)",
+          "status": "supported",
+          "note": "Page: Structured Outputs 'ensures the model will always generate responses that adhere to your supplied JSON Schema, so you don't need to worry about the model omitting a required key, or hallucinating an invalid enum value.'"
+        },
+        {
+          "claim": "Cost scales with input tokens (motivating feeding cleaned markdown rather than raw HTML)",
+          "status": "not_found",
+          "note": "The fetched Structured Outputs guide contains no pricing or token-cost information (pricing is only a nav link)."
+        }
+      ],
+      "summary": "Nearly all technical claims in the entry — the request-body shapes for both Responses (text.format) and Chat Completions (response_format.json_schema), the Pydantic/Zod SDK parse helpers, output_parsed, the GPT-4o/gpt-4o-mini-2024-07-18 model support floor, programmatically detectable refusals, and the existence of a 'supported schemas' constraint section — are directly confirmed by the fetched guide. Only peripheral items are unverifiable from this page: the literal REST paths (/v1/responses, /v1/chat/completions) and the token-cost claim, neither of which appears in the fetched text. Overall the entry is accurate and closely tracks the cited documentation."
+    },
+    {
+      "task_description": "Parse the fetched menu content into structured menu data: sections, dish names, descriptions, prices, currency and dietary tags.",
+      "api_name": "schema.org Menu / MenuItem (embedded JSON-LD on the restaurant's own site)",
+      "rank": 3,
+      "verdict": "partially_supported",
+      "checked_claims": [
+        {
+          "claim": "schema.org reports the Menu type appearing on 100K–1M domains",
+          "status": "supported",
+          "note": "The Menu page's Usage box states \"100K - 1M Domains\" based on Google's web index (July 2026)."
+        },
+        {
+          "claim": "Menu is defined as 'a structured representation of food or drink items available from a FoodEstablishment'",
+          "status": "supported",
+          "note": "That exact sentence appears as the definition on https://schema.org/Menu."
+        },
+        {
+          "claim": "Menu carries hasMenuSection and hasMenuItem properties",
+          "status": "supported",
+          "note": "Both properties are listed in the 'Properties from Menu' table, expecting MenuSection and MenuItem respectively."
+        },
+        {
+          "claim": "A MenuItem type exists that can be parsed as its own JSON-LD node",
+          "status": "supported",
+          "note": "MenuItem is the expected type of hasMenuItem and is linked as a schema.org type from the Menu page."
+        },
+        {
+          "claim": "Restaurant/FoodEstablishment nodes carry a hasMenu property",
+          "status": "not_found",
+          "note": "The fetched Menu page does not list or mention a hasMenu property; the FoodEstablishment/Restaurant pages were not fetched."
+        },
+        {
+          "claim": "Menu/MenuItem markup often omits prices or uses inconsistent offers/price nesting (i.e. price data is expressed via offers/price)",
+          "status": "not_found",
+          "note": "The fetched page shows no MenuItem property list, so nothing about offers, price, or currency fields is documented here."
+        },
+        {
+          "claim": "Dietary tags are available in this markup (needed for the parsing task)",
+          "status": "not_found",
+          "note": "No dietary-related property (e.g. suitableForDiet) appears anywhere in the fetched Menu page content."
+        }
+      ],
+      "summary": "The core, load-bearing claims — the Menu definition, the hasMenuItem/hasMenuSection properties, and the 100K–1M domain usage figure — are directly confirmed by the fetched schema.org/Menu page. Secondary claims about a hasMenu property on Restaurant/FoodEstablishment and about price/offers/currency and dietary-tag fields on MenuItem cannot be checked because only the Menu type page was fetched. Nothing in the evidence contradicts the entry, so it is largely reliable but incompletely verified."
+    }
+  ]
+}

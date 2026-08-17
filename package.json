@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/cli.ts",
+    "verify": "tsx src/verify.ts",
     "typecheck": "tsc --noEmit"
   },
   "license": "MIT",

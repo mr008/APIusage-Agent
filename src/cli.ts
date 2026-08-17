@@ -3,16 +3,7 @@ import path from "node:path";
 import { input, select, checkbox } from "@inquirer/prompts";
 import { runAgent } from "./agent.js";
 import { Trace } from "./trace.js";
-
-/** Minimal .env loader (no dependency): KEY=VALUE lines, # comments. */
-function loadDotenv(file = ".env"): void {
-  if (!fs.existsSync(file)) return;
-  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (!m || line.trim().startsWith("#")) continue;
-    if (!(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-}
+import { loadDotenv, requireEnv } from "./env.js";
 
 const OTHER = "__other__";
 const NO_ANSWER = "(no answer — use your best judgment)";
@@ -56,12 +47,7 @@ async function askInteractive(question: string, options: string[], multiSelect: 
 
 async function main(): Promise<void> {
   loadDotenv();
-  for (const key of ["ANTHROPIC_API_KEY", "FIRECRAWL_API_KEY"]) {
-    if (!process.env[key]) {
-      console.error(`Missing ${key}. Copy .env.example to .env and fill it in.`);
-      process.exit(1);
-    }
-  }
+  requireEnv(["ANTHROPIC_API_KEY", "FIRECRAWL_API_KEY"]);
 
   // Goal from argv (quoted string) or interactive prompt.
   let goal = process.argv.slice(2).join(" ").trim();
