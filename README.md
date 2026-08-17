@@ -60,8 +60,8 @@ A committed example: `examples/restaurant-menus.verification.json`.
 
 ## Example runs (committed under `examples/`)
 
-Three substantially different queries, each with its full execution trace and
-final report:
+Five substantially different queries, each with its full execution trace and
+final report (plus one verification audit):
 
 | Example | Query shape | Model | Notable behavior |
 |---|---|---|---|
@@ -81,20 +81,28 @@ npm start -- "An agent that plans multi-city trips: flight options, weather at e
 
 ```
 src/
-  cli.ts     entry point: reads the goal, wires up ask_user, prints/saves output
-  agent.ts   the control loop (observe → reason → act), stopping logic, error handling
+  cli.ts     entry point: reads the goal, renders ask_user option pickers, prints/saves output
+  agent.ts   the control loop (observe → reason → act), stopping logic, error handling,
+             incremental prompt caching (breakpoint moves to the newest turn each request)
   state.ts   the scratchpad: tasks, findings (fact vs assumption), coverage checks
   tools.ts   tool definitions + executors (Firecrawl search/scrape, scratchpad ops)
   schema.ts  Zod schema for the final report + generated JSON Schema for the tool
   prompt.ts  system prompt
   trace.ts   JSONL trace writer
+  verify.ts  independent verification pass (npm run verify)
+  env.ts     .env loading + required-key checks
+scripts/
+  check-key.ts    sanity-check the Anthropic key/billing (npx tsx scripts/check-key.ts)
+  smoke-tools.ts  sanity-check the Firecrawl search/scrape tools
 ```
 
 ### The control loop (`agent.ts`)
 
 Hand-rolled — no managed agent SDK. Each iteration:
 
-1. Send the conversation + tool definitions to Claude (streamed).
+1. Send the conversation + tool definitions to Claude (streamed; the prompt-cache
+   breakpoint is moved to the newest turn each request, so steady-state iterations
+   pay full price for only tens of input tokens).
 2. If the model requested tools, execute all of them and return the results in
    a single user turn, followed by a freshly rendered **scratchpad**.
 3. Repeat until `finalize_report` validates, or the budget forces a stop.

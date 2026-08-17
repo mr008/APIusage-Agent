@@ -71,7 +71,7 @@ Six tools, chosen so that each brief requirement maps to a visible action:
 | `fetch_page` | Read a docs page as markdown (Firecrawl scrape; handles JS-rendered sites) |
 | `plan_tasks` | Set / revise the task decomposition |
 | `record_finding` | Append evidence: `fact` (requires fetched source URL) or `assumption` |
-| `ask_user` | Clarifying question; loop pauses for terminal input |
+| `ask_user` | Clarifying question; the model proposes 2–5 answer options (plus multi-select flag) that the CLI renders as an arrow-key picker with an "Other" free-text fallback; loop pauses until answered |
 | `finalize_report` | Terminal action; schema-validated JSON |
 
 Policy lives in the tool descriptions rather than in loop code: search
@@ -84,7 +84,7 @@ breadth-then-depth research.
 
 ## 4. Accumulating and validating information
 
-Three layers keep the report honest:
+Four layers keep the report honest:
 
 1. **At recording time** — the executor enforces that facts carry a
    documentation URL; the prompt directs that only fetched pages (not
@@ -147,7 +147,13 @@ that improve information quality, which the brief explicitly permits.
 `traces/run-*.jsonl` records every model turn (text + stop reason + token
 usage), every tool call and result, and a full scratchpad snapshot per
 iteration. You can replay the agent's evolving conclusions by reading the
-snapshots alone — including the moment a finding gets superseded.
+snapshots alone — including the moment a finding gets superseded. The
+verification pass produces its own artifact (`*.verification.json`) with a
+per-claim audit trail, so report quality is itself observable. Cost is
+controlled by incremental prompt caching: the cache breakpoint moves to the
+newest turn on every request, so steady-state runs pay full price for only
+tens of input tokens while 1M+ tokens of accumulated context are served from
+cache (visible in each run's closing stats line).
 
 ## 8. Trade-offs under the time box
 
